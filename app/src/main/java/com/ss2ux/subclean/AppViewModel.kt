@@ -326,7 +326,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun setRuleSort(v: Int) {
+    fun changeRuleSort(v: Int) {
         ruleSort = v
         settingsStore.ruleSort = v
     }

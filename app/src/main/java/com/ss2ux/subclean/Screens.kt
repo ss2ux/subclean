@@ -597,7 +597,7 @@ private fun RulesScreen(vm: AppViewModel) {
                     for ((i, nm) in sortNames.withIndex()) {
                         DropdownMenuItem(
                             text = { Text(nm) },
-                            onClick = { vm.setRuleSort(i); sortMenu = false }
+                            onClick = { vm.changeRuleSort(i); sortMenu = false }
                         )
                     }
                 }
