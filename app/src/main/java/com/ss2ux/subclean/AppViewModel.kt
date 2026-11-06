@@ -30,7 +30,7 @@ class Preview(
 )
 
 /** 앱에 들어 있는 말투 팩의 버전. speech_pack.tsv 를 고쳐서 새로 넣어야 할 때 숫자를 올린다 */
-const val SPEECH_PACK_VERSION = 1
+const val SPEECH_PACK_VERSION = 2   // 2: 높임 '너 -> 당신' 규칙 추가
 
 class AppViewModel(private val app: Application) : AndroidViewModel(app) {
     private val ruleStore = RuleStore(app)
@@ -39,6 +39,10 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
     var rules by mutableStateOf(ruleStore.load())
         private set
     var settings by mutableStateOf(settingsStore.load())
+        private set
+
+    // 규칙 탭 정렬: 0 최신순, 1 오래된순, 2 찾을 말 가나다순 (보기 전용)
+    var ruleSort by mutableStateOf(settingsStore.ruleSort)
         private set
 
     // 열린 파일
@@ -320,6 +324,11 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
                 "기본 규칙을 불러오지 못했어요: ${e.message ?: e}"
             }
         }
+    }
+
+    fun setRuleSort(v: Int) {
+        ruleSort = v
+        settingsStore.ruleSort = v
     }
 
     fun updateRule(r: Rule) {

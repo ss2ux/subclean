@@ -2,7 +2,20 @@ package com.ss2ux.subclean
 
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.IntOffset
+import kotlinx.coroutines.launch
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -196,20 +209,24 @@ private fun CleanScreen(vm: AppViewModel) {
                     if (onlyChanged) pv.rows.filter { it.changed } else pv.rows
                 }
                 // 당겨서 새로고침이 먹으려면 영역이 스크롤 가능해야 해서, 빈 상태도 LazyColumn 안에 넣는다
+                val listState = rememberLazyListState()
                 Box(Modifier.weight(1f).fillMaxWidth().nestedScroll(pullState.nestedScrollConnection)) {
-                    LazyColumn(Modifier.fillMaxSize()) {
-                        if (shown.isEmpty()) {
-                            item {
-                                Box(Modifier.fillParentMaxSize(), contentAlignment = Alignment.Center) {
-                                    Text(
-                                        if (pv.rows.isEmpty()) "다듬을 대사가 없어요" else "바뀌는 줄이 없어요",
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
+                    Row(Modifier.fillMaxSize()) {
+                        LazyColumn(Modifier.weight(1f).fillMaxHeight(), state = listState) {
+                            if (shown.isEmpty()) {
+                                item {
+                                    Box(Modifier.fillParentMaxSize(), contentAlignment = Alignment.Center) {
+                                        Text(
+                                            if (pv.rows.isEmpty()) "다듬을 대사가 없어요" else "바뀌는 줄이 없어요",
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
                                 }
+                            } else {
+                                items(shown, key = { it.index }) { row -> RowCard(row) { vm.toggleExclude(row.index) } }
                             }
-                        } else {
-                            items(shown, key = { it.index }) { row -> RowCard(row) { vm.toggleExclude(row.index) } }
                         }
+                        ListScrollbar(listState)
                     }
                     PullToRefreshContainer(state = pullState, modifier = Modifier.align(Alignment.TopCenter))
                 }
@@ -259,6 +276,79 @@ private fun CleanScreen(vm: AppViewModel) {
             },
             dismissButton = { TextButton(onClick = { confirmOverwrite = false }) { Text("취소") } }
         )
+    }
+}
+
+/**
+ * 목록 오른쪽의 끌 수 있는 스크롤바. 항목이 20개 이상일 때만 나온다.
+ * 손잡이를 끌면 그 위치로 바로 이동하고, 끄는 동안 현재 번호(몇 번째 / 전체)를 말풍선으로 보여 준다.
+ * 목록과 겹치지 않게 Row 에서 목록 옆에 나란히 둔다.
+ */
+@Composable
+private fun ListScrollbar(state: LazyListState) {
+    val total = state.layoutInfo.totalItemsCount
+    val visible = state.layoutInfo.visibleItemsInfo.size
+    if (total < 20 || visible < 1 || visible >= total) return
+    val scope = rememberCoroutineScope()
+    val density = LocalDensity.current
+    var dragging by remember { mutableStateOf(false) }
+    var dragFrac by remember { mutableStateOf(0f) }
+    val thumbH = 56.dp
+
+    BoxWithConstraints(Modifier.fillMaxHeight().width(24.dp)) {
+        val heightPx = with(density) { maxHeight.toPx() }
+        val thumbPx = with(density) { thumbH.toPx() }
+        val span = (heightPx - thumbPx).coerceAtLeast(1f)
+        val frac = if (dragging) dragFrac
+        else state.firstVisibleItemIndex.toFloat() / (total - visible).coerceAtLeast(1)
+        val y = (frac.coerceIn(0f, 1f) * span).roundToInt()
+        val jumpIndex = (dragFrac.coerceIn(0f, 1f) * (total - 1)).roundToInt()
+
+        // 끌기를 받는 영역 (24dp 폭의 세로 띠)
+        Box(
+            Modifier.fillMaxSize().pointerInput(total, heightPx) {
+                detectVerticalDragGestures(
+                    onDragStart = { o ->
+                        dragging = true
+                        dragFrac = ((o.y - thumbPx / 2) / span).coerceIn(0f, 1f)
+                        scope.launch { state.scrollToItem((dragFrac * (total - 1)).roundToInt()) }
+                    },
+                    onDragEnd = { dragging = false },
+                    onDragCancel = { dragging = false },
+                    onVerticalDrag = { change, _ ->
+                        change.consume()
+                        dragFrac = ((change.position.y - thumbPx / 2) / span).coerceIn(0f, 1f)
+                        scope.launch { state.scrollToItem((dragFrac * (total - 1)).roundToInt()) }
+                    }
+                )
+            }
+        )
+        // 손잡이
+        Box(
+            Modifier
+                .align(Alignment.TopEnd)
+                .offset { IntOffset(0, y) }
+                .width(if (dragging) 10.dp else 5.dp)
+                .height(thumbH)
+                .background(
+                    MaterialTheme.colorScheme.outline.copy(alpha = if (dragging) 0.9f else 0.6f),
+                    RoundedCornerShape(50)
+                )
+        )
+        if (dragging) {
+            Surface(
+                Modifier.align(Alignment.TopEnd).offset { IntOffset((-32).dp.roundToPx(), y + 8) },
+                shape = MaterialTheme.shapes.small,
+                color = MaterialTheme.colorScheme.inverseSurface
+            ) {
+                Text(
+                    "${jumpIndex + 1} / $total",
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                    color = MaterialTheme.colorScheme.inverseOnSurface,
+                    fontSize = 13.sp
+                )
+            }
+        }
     }
 }
 
@@ -441,15 +531,30 @@ private fun RulesScreen(vm: AppViewModel) {
     }
 
     val q = query.trim()
-    val shown = remember(vm.rules, q, filterIdx) {
+    val sort = vm.ruleSort
+    val sortNames = listOf("최신순", "오래된순", "가나다순")
+    val listState = rememberLazyListState()
+    var prevSize by remember { mutableIntStateOf(vm.rules.size) }
+    // 규칙이 새로 생기면(추가·가져오기·팩) 최신순에서는 맨 위로 올려서 바로 보이게 한다
+    LaunchedEffect(vm.rules.size) {
+        if (vm.rules.size > prevSize && sort == 0) listState.scrollToItem(0)
+        prevSize = vm.rules.size
+    }
+    val shown = remember(vm.rules, q, filterIdx, sort) {
         val bySpeech = when (filterIdx) {
             1 -> vm.rules.filter { it.speech == Speech.ALL }
             2 -> vm.rules.filter { it.speech == Speech.HONORIFIC }
             3 -> vm.rules.filter { it.speech == Speech.CASUAL }
             else -> vm.rules
         }
-        if (q.isEmpty()) bySpeech
+        val found = if (q.isEmpty()) bySpeech
         else bySpeech.filter { it.find.contains(q, ignoreCase = true) || it.replace.contains(q, ignoreCase = true) }
+        // 정렬은 보기 전용: vm.rules(저장 순서 = 정규식 적용 순서)는 건드리지 않고 복사본만 정렬한다
+        when (sort) {
+            0 -> found.sortedByDescending { it.id }
+            2 -> found.sortedBy { it.find.lowercase() }
+            else -> found
+        }
     }
     val defaultSpeech = when (filterIdx) {
         2 -> Speech.HONORIFIC
@@ -478,12 +583,26 @@ private fun RulesScreen(vm: AppViewModel) {
                 FilterChip(selected = filterIdx == i, onClick = { filterIdx = i }, label = { Text(nm) })
             }
         }
-        Text(
-            "규칙 ${vm.rules.size}개 (켜짐 ${vm.rules.count { it.enabled }}개)",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-        Spacer(Modifier.height(4.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                "규칙 ${vm.rules.size}개 (켜짐 ${vm.rules.count { it.enabled }}개)",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.weight(1f)
+            )
+            var sortMenu by remember { mutableStateOf(false) }
+            Box {
+                TextButton(onClick = { sortMenu = true }) { Text("정렬: ${sortNames[sort]}") }
+                DropdownMenu(expanded = sortMenu, onDismissRequest = { sortMenu = false }) {
+                    for ((i, nm) in sortNames.withIndex()) {
+                        DropdownMenuItem(
+                            text = { Text(nm) },
+                            onClick = { vm.setRuleSort(i); sortMenu = false }
+                        )
+                    }
+                }
+            }
+        }
 
         if (shown.isEmpty()) {
             Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
@@ -493,36 +612,39 @@ private fun RulesScreen(vm: AppViewModel) {
                 )
             }
         } else {
-            LazyColumn(Modifier.weight(1f).fillMaxWidth()) {
-                items(shown, key = { it.id }) { r ->
-                    Row(
-                        Modifier.fillMaxWidth().clickable { editing = r }.padding(vertical = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Switch(checked = r.enabled, onCheckedChange = { vm.updateRule(r.copy(enabled = it)) })
-                        Spacer(Modifier.width(12.dp))
-                        Column(Modifier.weight(1f)) {
-                            Text(
-                                r.find + "  →  " + r.replace.ifEmpty { "(삭제)" },
-                                maxLines = 2,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                            if (r.regex || r.speech != Speech.ALL) {
+            Row(Modifier.weight(1f).fillMaxWidth()) {
+                LazyColumn(Modifier.weight(1f).fillMaxHeight(), state = listState) {
+                    items(shown, key = { it.id }) { r ->
+                        Row(
+                            Modifier.fillMaxWidth().clickable { editing = r }.padding(vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Switch(checked = r.enabled, onCheckedChange = { vm.updateRule(r.copy(enabled = it)) })
+                            Spacer(Modifier.width(12.dp))
+                            Column(Modifier.weight(1f)) {
                                 Text(
-                                    listOfNotNull(
-                                        if (r.regex) "정규식" else null,
-                                        if (r.speech != Speech.ALL) r.speech.ruleLabel else null
-                                    ).joinToString(" · "),
-                                    fontSize = 11.sp,
-                                    color = MaterialTheme.colorScheme.primary
+                                    r.find + "  →  " + r.replace.ifEmpty { "(삭제)" },
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis
                                 )
+                                if (r.regex || r.speech != Speech.ALL) {
+                                    Text(
+                                        listOfNotNull(
+                                            if (r.regex) "정규식" else null,
+                                            if (r.speech != Speech.ALL) r.speech.ruleLabel else null
+                                        ).joinToString(" · "),
+                                        fontSize = 11.sp,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                }
                             }
-                        }
-                        IconButton(onClick = { deleting = r }) {
-                            Icon(Icons.Default.Delete, contentDescription = "삭제")
+                            IconButton(onClick = { deleting = r }) {
+                                Icon(Icons.Default.Delete, contentDescription = "삭제")
+                            }
                         }
                     }
                 }
+                ListScrollbar(listState)
             }
         }
     }

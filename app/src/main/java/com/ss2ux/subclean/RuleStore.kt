@@ -149,6 +149,11 @@ class SettingsStore(context: Context) {
         get() = p.getInt("speechPackVersion", 0)
         set(v) { p.edit().putInt("speechPackVersion", v).apply() }
 
+    /** 규칙 탭 정렬 (0 = 최신순, 1 = 오래된순, 2 = 찾을 말 가나다순). 보기 전용이라 저장 순서는 바뀌지 않는다 */
+    var ruleSort: Int
+        get() = p.getInt("ruleSort", 0).coerceIn(0, 2)
+        set(v) { p.edit().putInt("ruleSort", v).apply() }
+
     fun save(o: CleanOptions) {
         p.edit()
             .putInt("threshold", o.threshold)

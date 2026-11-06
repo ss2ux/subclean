@@ -1,3 +1,8 @@
+> **[최신 갱신] C 보완(프리셋 자동 설치), A(당겨서 새로고침), B(규칙 정렬 + 스크롤바), 높임 `너->당신` 모두 코드에 들어 있음.**
+> 남은 일은 GitHub Actions 빌드 결과 확인과, 사용자가 주는 어색한 문장 예시로 규칙 팩 보강뿐이다. 아래 A/B 설명은 구현 기록으로만 읽을 것.
+> 팩을 고칠 때는 `dev_tests/gen_pack.py` 를 고치고 `python3 gen_pack.py` 로 `speech_pack.tsv` 를 다시 만든 뒤 `res/raw/` 에 복사,
+> `SPEECH_PACK_VERSION` 을 올리고 `java PackTest.java speech_pack.tsv cases.tsv` 로 확인한다.
+
 # subclean 다음 작업 인수인계 (새 세션용)
 
 > **[갱신] C(말투 프로필)는 완료됨.** 남은 작업은 **A(당겨서 새로고침) → B(정렬+스크롤바)**.
