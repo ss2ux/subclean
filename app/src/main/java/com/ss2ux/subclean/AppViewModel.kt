@@ -50,6 +50,10 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
     var preview by mutableStateOf<Preview?>(null)
         private set
 
+    // 저장 후(또는 '결과 전체 보기')에 보여 주는 바뀐 전체 텍스트. null 이면 창이 닫혀 있음
+    var resultText by mutableStateOf<String?>(null)
+        private set
+
     var message by mutableStateOf<String?>(null)
     var busy by mutableStateOf(false)
         private set
@@ -58,6 +62,18 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
     private var job: Job? = null
 
     fun clearMessage() { message = null }
+
+    fun closeResult() { resultText = null }
+
+    /** 지금 미리보기 기준으로 바뀐 전체 텍스트를 만들어 보여 준다 (저장 안 해도 됨) */
+    fun showResult() {
+        val dc = doc ?: return
+        val p = preview ?: return
+        viewModelScope.launch(Dispatchers.Default) {
+            val text = dc.render(p.newBodies)
+            withContext(Dispatchers.Main) { resultText = text }
+        }
+    }
 
     // ---------------- 파일 ----------------
 
@@ -157,6 +173,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         viewModelScope.launch(Dispatchers.IO) {
             var msg = ""
             var newBytes: ByteArray? = null
+            var savedText: String? = null
             try {
                 val text = dc.render(p.newBodies)
                 val (out, note) = Encodings.encode(text, d)
@@ -165,6 +182,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
                 stream.use { it.write(out) }
                 msg = "저장했어요 (${p.changedCount}줄 바뀜)" + (if (note != null) " · $note" else "")
                 newBytes = out
+                savedText = text
             } catch (e: SecurityException) {
                 msg = "저장 권한이 없어요. '다른 이름으로 저장'을 써 주세요"
             } catch (e: Exception) {
@@ -173,6 +191,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
             withContext(Dispatchers.Main) {
                 message = msg
                 busy = false
+                if (savedText != null) resultText = savedText   // 저장 직후 바뀐 전체 텍스트 표시
                 // 원본에 덮어썼다면 새 내용을 기준으로 다시 읽는다
                 if (overwrite && newBytes != null) {
                     bytes = newBytes

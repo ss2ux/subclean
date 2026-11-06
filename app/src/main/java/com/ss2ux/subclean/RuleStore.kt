@@ -128,7 +128,8 @@ class SettingsStore(context: Context) {
             normalize = p.getBoolean("normalize", d.normalize),
             compressChars = p.getBoolean("compressChars", d.compressChars),
             compressWords = p.getBoolean("compressWords", d.compressWords),
-            compressUnits = p.getBoolean("compressUnits", d.compressUnits)
+            compressUnits = p.getBoolean("compressUnits", d.compressUnits),
+            fixJosa = p.getBoolean("fixJosa", d.fixJosa)
         )
     }
 
@@ -140,6 +141,7 @@ class SettingsStore(context: Context) {
             .putBoolean("compressChars", o.compressChars)
             .putBoolean("compressWords", o.compressWords)
             .putBoolean("compressUnits", o.compressUnits)
+            .putBoolean("fixJosa", o.fixJosa)
             .apply()
     }
 }

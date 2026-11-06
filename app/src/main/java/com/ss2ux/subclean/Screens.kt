@@ -16,8 +16,11 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.FolderOpen
@@ -36,6 +39,7 @@ import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -53,6 +57,10 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -160,6 +168,8 @@ private fun CleanScreen(vm: AppViewModel) {
                         onClick = { onlyChanged = !onlyChanged },
                         label = { Text("바뀐 줄만 보기") }
                     )
+                    Spacer(Modifier.weight(1f))
+                    TextButton(onClick = { vm.showResult() }) { Text("결과 전체 보기") }
                 }
 
                 val shown = remember(pv, onlyChanged) {
@@ -208,6 +218,8 @@ private fun CleanScreen(vm: AppViewModel) {
         }
     }
 
+    vm.resultText?.let { text -> ResultDialog(text) { vm.closeResult() } }
+
     if (confirmOverwrite) {
         AlertDialog(
             onDismissRequest = { confirmOverwrite = false },
@@ -221,6 +233,60 @@ private fun CleanScreen(vm: AppViewModel) {
             },
             dismissButton = { TextButton(onClick = { confirmOverwrite = false }) { Text("취소") } }
         )
+    }
+}
+
+/** 바뀐 전체 텍스트: 길게 눌러 일부를 선택·복사할 수 있고, 위의 버튼으로 전체를 한 번에 복사한다 */
+@Composable
+private fun ResultDialog(text: String, onClose: () -> Unit) {
+    val clip = LocalClipboardManager.current
+    var copied by remember { mutableStateOf(false) }
+    var copyError by remember { mutableStateOf(false) }
+    val limit = 80_000
+    val truncated = text.length > limit
+    val shown = if (truncated) text.substring(0, limit) else text
+
+    Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        Surface(Modifier.fillMaxSize().padding(12.dp), shape = MaterialTheme.shapes.large) {
+            Column(Modifier.padding(16.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("바뀐 전체 텍스트", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+                    IconButton(onClick = onClose) { Icon(Icons.Default.Close, contentDescription = "닫기") }
+                }
+                Button(
+                    onClick = {
+                        try {
+                            clip.setText(AnnotatedString(text))
+                            copied = true
+                            copyError = false
+                        } catch (e: Exception) {
+                            copyError = true
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(Icons.Default.ContentCopy, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text(if (copied) "복사했어요 (전체 ${text.length}자)" else "전체 복사")
+                }
+                if (copyError) {
+                    Text("복사하지 못했어요. 파일이 너무 클 수 있어요", color = MaterialTheme.colorScheme.error, fontSize = 13.sp)
+                }
+                if (truncated) {
+                    Text(
+                        "파일이 커서 앞부분 ${limit}자만 보여요. '전체 복사'는 전체를 복사해요.",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Spacer(Modifier.height(8.dp))
+                SelectionContainer(Modifier.weight(1f).fillMaxWidth()) {
+                    Column(Modifier.verticalScroll(rememberScrollState())) {
+                        Text(shown, fontSize = 14.sp)
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -478,6 +544,13 @@ private fun SettingsScreen(vm: AppViewModel) {
             "여러 글자 덩어리 반복 (실험)", "너무너무너무너무너무 → 너무너무. 띄어쓰기 없는 중국어·일본어용. 엉뚱하게 줄어드는지 미리보기로 확인하세요",
             o.compressUnits
         ) { vm.updateSettings(o.copy(compressUnits = it)) }
+
+        Spacer(Modifier.height(16.dp))
+        Text("조사", style = MaterialTheme.typography.titleMedium)
+        SettingSwitch(
+            "치환 뒤 조사 보정", "철수가 → 민철로 바꾸면 민철이, 영희는 → 민수로 바꾸면 민수는. 일반 규칙으로 바뀐 말 바로 뒤의 이/가 은/는 을/를 과/와 (으)로 (이)랑 (이)나 (이)라 아/야 예요/이에요만 고쳐요. 정규식 규칙은 대상이 아니에요",
+            o.fixJosa
+        ) { vm.updateSettings(o.copy(fixJosa = it)) }
 
         Spacer(Modifier.height(16.dp))
         Text("글자 정리", style = MaterialTheme.typography.titleMedium)
