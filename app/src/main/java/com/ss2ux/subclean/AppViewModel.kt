@@ -5,6 +5,7 @@ import android.content.Intent
 import android.net.Uri
 import android.provider.OpenableColumns
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
@@ -66,6 +67,17 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
     // 사용자가 "이 줄은 바꾸지 않기"로 뺀 줄 번호들 (파일을 새로 열거나 다시 읽으면 비워진다)
     var excluded by mutableStateOf<Set<Int>>(emptySet())
         private set
+
+    // 분할 탭 (5천자 넘는 텍스트를 DeepL 에 나눠 넣기). 탭을 옮겨도 남도록 여기에 둔다
+    var splitText by mutableStateOf("")
+        private set
+    var splitLimit by mutableIntStateOf(settingsStore.splitLimit)
+        private set
+    var splitChunks by mutableStateOf<List<String>>(emptyList())
+        private set
+    var splitCopied by mutableStateOf<Set<Int>>(emptySet())
+        private set
+    private var splitJob: Job? = null
 
     var message by mutableStateOf<String?>(null)
     var busy by mutableStateOf(false)
@@ -266,6 +278,83 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
                     forcedCharset = null
                     reparse()
                 }
+            }
+        }
+    }
+
+    // ---------------- 분할 ----------------
+
+    fun setSplitText(t: String) {
+        splitText = t
+        resplit()
+    }
+
+    fun setSplitLimit(v: Int) {
+        val c = v.coerceIn(1000, Splitter.MAX_LIMIT)
+        splitLimit = c
+        settingsStore.splitLimit = c
+        resplit()
+    }
+
+    /** 글이나 제한이 바뀔 때마다 다시 나눈다. 복사 표시는 새로 시작 */
+    private fun resplit() {
+        val t = splitText
+        val lim = splitLimit
+        splitCopied = emptySet()
+        splitJob?.cancel()
+        splitJob = viewModelScope.launch(Dispatchers.Default) {
+            val r = Splitter.split(t, lim)
+            withContext(Dispatchers.Main) { splitChunks = r }
+        }
+    }
+
+    fun markSplitCopied(i: Int) {
+        splitCopied = splitCopied + i
+    }
+
+    fun resetSplitCopied() {
+        splitCopied = emptySet()
+    }
+
+    /** 다듬기 탭에 열어 둔 자막의 대사만(타임스탬프·번호 제외, 다듬기 전 원문) 분할 입력칸에 넣는다 */
+    fun importOpenSubtitleToSplit() {
+        val d = doc
+        if (d == null) {
+            message = "다듬기 탭에서 자막 파일을 먼저 열어 주세요"
+            return
+        }
+        setSplitText(d.lines.filter { it.editable }.joinToString("\n") { it.body })
+        message = "대사 ${d.editableCount}줄을 가져왔어요"
+    }
+
+    /** 분할 탭에서 파일을 직접 연다. 자막(.srt .vtt .lrc)이면 대사만, 일반 텍스트면 전부 넣는다 */
+    fun loadSplitFile(uri: Uri) {
+        viewModelScope.launch(Dispatchers.IO) {
+            var msg: String? = null
+            var body: String? = null
+            try {
+                var name = ""
+                app.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
+                    if (c.moveToFirst()) name = c.getString(0) ?: ""
+                }
+                val raw = app.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                if (raw == null) {
+                    msg = "파일을 열 수 없어요"
+                } else if (raw.size > 20_000_000) {
+                    msg = "파일이 너무 커요 (20MB 초과)"
+                } else {
+                    val text = Encodings.decode(raw, null).text
+                    val d = Doc.parse(name, text)
+                    body = if (d.kind == Kind.TXT) text.removePrefix("\uFEFF")
+                    else d.lines.filter { it.editable }.joinToString("\n") { it.body }
+                    msg = if (d.kind == Kind.TXT) "파일을 불러왔어요" else "자막 대사 ${d.editableCount}줄을 불러왔어요"
+                }
+            } catch (e: Exception) {
+                msg = "열기 실패: ${e.message ?: e}"
+            }
+            withContext(Dispatchers.Main) {
+                if (body != null) setSplitText(body)
+                message = msg
             }
         }
     }

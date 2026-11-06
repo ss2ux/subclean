@@ -34,6 +34,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.ContentCut
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.FolderOpen
@@ -113,6 +114,11 @@ fun AppScreen(vm: AppViewModel = viewModel()) {
                 )
                 NavigationBarItem(
                     selected = tab == 2, onClick = { tab = 2 },
+                    icon = { Icon(Icons.Default.ContentCut, contentDescription = null) },
+                    label = { Text("분할") }
+                )
+                NavigationBarItem(
+                    selected = tab == 3, onClick = { tab = 3 },
                     icon = { Icon(Icons.Default.Settings, contentDescription = null) },
                     label = { Text("설정") }
                 )
@@ -123,6 +129,7 @@ fun AppScreen(vm: AppViewModel = viewModel()) {
             when (tab) {
                 0 -> CleanScreen(vm)
                 1 -> RulesScreen(vm)
+                2 -> SplitScreen(vm)
                 else -> SettingsScreen(vm)
             }
         }

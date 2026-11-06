@@ -155,6 +155,11 @@ class SettingsStore(context: Context) {
         get() = p.getInt("ruleSort", 0).coerceIn(0, 2)
         set(v) { p.edit().putInt("ruleSort", v).apply() }
 
+    /** 분할 탭의 글자 수 제한 (1000~5000, 기본 4500) */
+    var splitLimit: Int
+        get() = p.getInt("splitLimit", Splitter.DEFAULT_LIMIT).coerceIn(1000, Splitter.MAX_LIMIT)
+        set(v) { p.edit().putInt("splitLimit", v.coerceIn(1000, Splitter.MAX_LIMIT)).apply() }
+
     fun save(o: CleanOptions) {
         p.edit()
             .putInt("threshold", o.threshold)
