@@ -20,7 +20,8 @@ class RuleStore(context: Context) {
                     find = o.optString("find"),
                     replace = o.optString("replace"),
                     regex = o.optBoolean("regex", false),
-                    enabled = o.optBoolean("enabled", true)
+                    enabled = o.optBoolean("enabled", true),
+                    speech = Speech.fromName(o.optString("speech", "ALL"))   // 이전 버전 파일에는 없음 -> 공통
                 )
             }
         } catch (e: Exception) {
@@ -38,6 +39,7 @@ class RuleStore(context: Context) {
                     .put("replace", r.replace)
                     .put("regex", r.regex)
                     .put("enabled", r.enabled)
+                    .put("speech", r.speech.name)
             )
         }
         // 쓰다가 꺼져도 기존 파일이 깨지지 않게 임시 파일에 쓰고 바꿔치기
@@ -83,14 +85,17 @@ class RuleStore(context: Context) {
         /**
          * 내보내기 형식 (메모장으로도 편집 가능):
          *   찾을 말 <TAB> 바꿀 말 <TAB> 옵션
-         * 옵션: R = 정규식, - = 꺼짐 (둘 다면 R-). 줄바꿈/탭은 \n \t 로, 역슬래시는 \\ 로 적는다.
+         * 옵션: R = 정규식, H = 높임 전용, C = 반말 전용, - = 꺼짐 (겹치면 RH-, RC 처럼 붙여 쓴다).
+         *       H/C 가 없으면 공통. 이전 버전 파일도 그대로 열린다. 줄바꿈/탭은 \n \t 로, 역슬래시는 \\ 로 적는다.
          * # 로 시작하는 줄은 설명(무시)
          */
         fun toTsv(rules: List<Rule>): String {
             val sb = StringBuilder()
-            sb.append("# 자막 다듬기 치환 규칙: 찾을 말<TAB>바꿀 말<TAB>옵션(R=정규식, -=꺼짐)\n")
+            sb.append("# 자막 다듬기 치환 규칙: 찾을 말<TAB>바꿀 말<TAB>옵션(R=정규식, H=높임, C=반말, -=꺼짐)\n")
             for (r in rules) {
-                val flags = (if (r.regex) "R" else "") + (if (r.enabled) "" else "-")
+                val flags = (if (r.regex) "R" else "") +
+                    (when (r.speech) { Speech.HONORIFIC -> "H"; Speech.CASUAL -> "C"; Speech.ALL -> "" }) +
+                    (if (r.enabled) "" else "-")
                 sb.append(esc(r.find)).append('\t').append(esc(r.replace))
                 if (flags.isNotEmpty()) sb.append('\t').append(flags)
                 sb.append('\n')
@@ -109,7 +114,12 @@ class RuleStore(context: Context) {
                 if (find.isEmpty()) continue
                 val repl = if (cols.size > 1) unesc(cols[1]) else ""
                 val flags = if (cols.size > 2) cols[2].trim().uppercase() else ""
-                out.add(Rule(id++, find, repl, regex = 'R' in flags, enabled = '-' !in flags))
+                val speech = when {
+                    'H' in flags -> Speech.HONORIFIC
+                    'C' in flags -> Speech.CASUAL
+                    else -> Speech.ALL
+                }
+                out.add(Rule(id++, find, repl, regex = 'R' in flags, enabled = '-' !in flags, speech = speech))
             }
             return out
         }
@@ -129,7 +139,8 @@ class SettingsStore(context: Context) {
             compressChars = p.getBoolean("compressChars", d.compressChars),
             compressWords = p.getBoolean("compressWords", d.compressWords),
             compressUnits = p.getBoolean("compressUnits", d.compressUnits),
-            fixJosa = p.getBoolean("fixJosa", d.fixJosa)
+            fixJosa = p.getBoolean("fixJosa", d.fixJosa),
+            speech = Speech.fromName(p.getString("speech", d.speech.name))
         )
     }
 
@@ -142,6 +153,7 @@ class SettingsStore(context: Context) {
             .putBoolean("compressWords", o.compressWords)
             .putBoolean("compressUnits", o.compressUnits)
             .putBoolean("fixJosa", o.fixJosa)
+            .putString("speech", o.speech.name)
             .apply()
     }
 }

@@ -151,6 +151,8 @@ private fun CleanScreen(vm: AppViewModel) {
             )
         }
 
+        SpeechRow(vm)
+
         if (doc != null && dec != null) {
             EncodingRow(vm, doc, dec)
 
@@ -232,6 +234,33 @@ private fun CleanScreen(vm: AppViewModel) {
                 }) { Text("덮어쓰기") }
             },
             dismissButton = { TextButton(onClick = { confirmOverwrite = false }) { Text("취소") } }
+        )
+    }
+}
+
+/** 말투 선택: 파일마다 바로 바꿔 보면서 미리보기를 확인한다. 마지막 선택은 기억한다 */
+@Composable
+private fun SpeechRow(vm: AppViewModel) {
+    val cur = vm.settings.speech
+    Column(Modifier.fillMaxWidth().padding(top = 4.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("말투", style = MaterialTheme.typography.bodyMedium)
+            for (s in Speech.values()) {
+                FilterChip(
+                    selected = cur == s,
+                    onClick = { vm.updateSettings(vm.settings.copy(speech = s)) },
+                    label = { Text(s.chipLabel) }
+                )
+            }
+        }
+        Text(
+            when (cur) {
+                Speech.ALL -> "공통 규칙만 적용해요"
+                Speech.HONORIFIC -> "공통 + 높임 규칙: 존댓말(해요체)로 통일해요"
+                Speech.CASUAL -> "공통 + 반말 규칙: 반말(해체)로 통일해요"
+            },
+            fontSize = 12.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
         )
     }
 }
@@ -357,6 +386,8 @@ private fun RulesScreen(vm: AppViewModel) {
     var editing by remember { mutableStateOf<Rule?>(null) }
     var adding by remember { mutableStateOf(false) }
     var deleting by remember { mutableStateOf<Rule?>(null) }
+    var confirmPack by remember { mutableStateOf(false) }
+    var filterIdx by rememberSaveable { mutableIntStateOf(0) }   // 0 전체, 1 공통, 2 높임, 3 반말 (보기 전용)
 
     val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) vm.importRules(uri)
@@ -368,9 +399,20 @@ private fun RulesScreen(vm: AppViewModel) {
     }
 
     val q = query.trim()
-    val shown = remember(vm.rules, q) {
-        if (q.isEmpty()) vm.rules
-        else vm.rules.filter { it.find.contains(q, ignoreCase = true) || it.replace.contains(q, ignoreCase = true) }
+    val shown = remember(vm.rules, q, filterIdx) {
+        val bySpeech = when (filterIdx) {
+            1 -> vm.rules.filter { it.speech == Speech.ALL }
+            2 -> vm.rules.filter { it.speech == Speech.HONORIFIC }
+            3 -> vm.rules.filter { it.speech == Speech.CASUAL }
+            else -> vm.rules
+        }
+        if (q.isEmpty()) bySpeech
+        else bySpeech.filter { it.find.contains(q, ignoreCase = true) || it.replace.contains(q, ignoreCase = true) }
+    }
+    val defaultSpeech = when (filterIdx) {
+        2 -> Speech.HONORIFIC
+        3 -> Speech.CASUAL
+        else -> Speech.ALL
     }
 
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
@@ -386,6 +428,13 @@ private fun RulesScreen(vm: AppViewModel) {
             Button(onClick = { adding = true }) { Text("규칙 추가") }
             TextButton(onClick = { importLauncher.launch(arrayOf("*/*")) }) { Text("가져오기") }
             TextButton(onClick = { exportLauncher.launch("치환규칙.tsv") }) { Text("내보내기") }
+            TextButton(onClick = { confirmPack = true }) { Text("말투 팩") }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            val names = listOf("전체", "공통", "높임", "반말")
+            for ((i, nm) in names.withIndex()) {
+                FilterChip(selected = filterIdx == i, onClick = { filterIdx = i }, label = { Text(nm) })
+            }
         }
         Text(
             "규칙 ${vm.rules.size}개 (켜짐 ${vm.rules.count { it.enabled }}개)",
@@ -416,8 +465,15 @@ private fun RulesScreen(vm: AppViewModel) {
                                 maxLines = 2,
                                 overflow = TextOverflow.Ellipsis
                             )
-                            if (r.regex) {
-                                Text("정규식", fontSize = 11.sp, color = MaterialTheme.colorScheme.primary)
+                            if (r.regex || r.speech != Speech.ALL) {
+                                Text(
+                                    listOfNotNull(
+                                        if (r.regex) "정규식" else null,
+                                        if (r.speech != Speech.ALL) r.speech.ruleLabel else null
+                                    ).joinToString(" · "),
+                                    fontSize = 11.sp,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
                             }
                         }
                         IconButton(onClick = { deleting = r }) {
@@ -432,15 +488,34 @@ private fun RulesScreen(vm: AppViewModel) {
     if (adding) {
         RuleDialog(
             initial = null,
+            defaultSpeech = defaultSpeech,
             onDismiss = { adding = false },
-            onSave = { f, r, rx -> vm.addRule(f, r, rx); adding = false }
+            onSave = { f, r, rx, sp -> vm.addRule(f, r, rx, sp); adding = false }
         )
     }
     editing?.let { cur ->
         RuleDialog(
             initial = cur,
+            defaultSpeech = cur.speech,
             onDismiss = { editing = null },
-            onSave = { f, r, rx -> vm.updateRule(cur.copy(find = f, replace = r, regex = rx)); editing = null }
+            onSave = { f, r, rx, sp -> vm.updateRule(cur.copy(find = f, replace = r, regex = rx, speech = sp)); editing = null }
+        )
+    }
+    if (confirmPack) {
+        AlertDialog(
+            onDismissRequest = { confirmPack = false },
+            title = { Text("기본 말투 규칙을 넣을까요?") },
+            text = {
+                Text(
+                    "높임(해요체로 통일)과 반말(해체로 통일) 규칙 묶음을 규칙 목록 끝에 추가해요. " +
+                        "이미 들어 있는 규칙은 건드리지 않고, 기존 규칙은 전부 그대로예요. " +
+                        "정규식 규칙은 위에서 아래 순서대로 적용되니 순서는 바꾸지 마세요."
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { confirmPack = false; vm.installSpeechPack() }) { Text("넣기") }
+            },
+            dismissButton = { TextButton(onClick = { confirmPack = false }) { Text("취소") } }
         )
     }
     deleting?.let { cur ->
@@ -459,18 +534,20 @@ private fun RulesScreen(vm: AppViewModel) {
 @Composable
 private fun RuleDialog(
     initial: Rule?,
+    defaultSpeech: Speech,
     onDismiss: () -> Unit,
-    onSave: (String, String, Boolean) -> Unit
+    onSave: (String, String, Boolean, Speech) -> Unit
 ) {
     var find by remember { mutableStateOf(initial?.find ?: "") }
     var replace by remember { mutableStateOf(initial?.replace ?: "") }
     var regex by remember { mutableStateOf(initial?.regex ?: false) }
+    var speech by remember { mutableStateOf(initial?.speech ?: defaultSpeech) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(if (initial == null) "규칙 추가" else "규칙 수정") },
         text = {
-            Column {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
                 OutlinedTextField(
                     value = find, onValueChange = { find = it },
                     label = { Text("찾을 말") }, modifier = Modifier.fillMaxWidth()
@@ -486,15 +563,28 @@ private fun RuleDialog(
                 }
                 if (regex) {
                     Text(
-                        "바꿀 말에서 \$1 처럼 괄호 묶음을 다시 쓸 수 있어요.",
+                        "바꿀 말에서 \$1 처럼 괄호 묶음을 다시 쓸 수 있어요. " +
+                            "찾을 말에는 {받침} {무받침} {ㄹ받침} {ㄴ받침} {ㅆ받침} {양성받침} 으로 받침 있는/없는 글자를 가리킬 수 있어요. 예: (?<={받침})이야",
                         fontSize = 12.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
+                Spacer(Modifier.height(8.dp))
+                Text("말투", style = MaterialTheme.typography.bodyMedium)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    for (s in Speech.values()) {
+                        FilterChip(selected = speech == s, onClick = { speech = s }, label = { Text(s.ruleLabel) })
+                    }
+                }
+                Text(
+                    "공통은 어느 말투에서나 적용돼요. 높임/반말은 그 말투를 골랐을 때만 적용돼요.",
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
         },
         confirmButton = {
-            TextButton(onClick = { onSave(find, replace, regex) }, enabled = find.isNotEmpty()) { Text("저장") }
+            TextButton(onClick = { onSave(find, replace, regex, speech) }, enabled = find.isNotEmpty()) { Text("저장") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("취소") } }
     )

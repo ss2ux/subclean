@@ -137,8 +137,9 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
             preview = null
             return
         }
-        val r = rules
         val s = settings
+        // 공통 규칙 + 지금 고른 말투의 규칙만 쓴다 (저장 순서는 그대로 유지: 정규식은 순서대로 적용되므로)
+        val r = rules.filter { it.speech == Speech.ALL || it.speech == s.speech }
         job?.cancel()
         job = viewModelScope.launch(Dispatchers.Default) {
             val cleaner = Cleaner(r, s)
@@ -212,8 +213,33 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
 
     private fun nextId(): Long = (rules.maxOfOrNull { it.id } ?: 0L) + 1
 
-    fun addRule(find: String, replace: String, regex: Boolean) {
-        commitRules(rules + Rule(nextId(), find, replace, regex, true))
+    fun addRule(find: String, replace: String, regex: Boolean, speech: Speech = Speech.ALL) {
+        commitRules(rules + Rule(nextId(), find, replace, regex, true, speech))
+    }
+
+    /** 앱에 들어 있는 기본 말투 규칙 팩(높임/반말)을 규칙 목록 끝에 추가한다. 이미 있는 규칙은 건드리지 않는다 */
+    fun installSpeechPack() {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val text = app.resources.openRawResource(R.raw.speech_pack).use { String(it.readBytes(), Charsets.UTF_8) }
+                withContext(Dispatchers.Main) {
+                    val incoming = RuleStore.fromTsv(text, nextId())
+                    var list = rules
+                    var added = 0
+                    for (r in incoming) {
+                        val exists = list.any { it.find == r.find && it.regex == r.regex && it.speech == r.speech }
+                        if (!exists) {
+                            list = list + r.copy(id = (list.maxOfOrNull { it.id } ?: 0L) + 1)
+                            added++
+                        }
+                    }
+                    if (added > 0) commitRules(list)
+                    message = if (added > 0) "기본 말투 규칙 ${added}개를 추가했어요" else "기본 말투 규칙이 이미 모두 들어 있어요"
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) { message = "기본 규칙을 불러오지 못했어요: ${e.message ?: e}" }
+            }
+        }
     }
 
     fun updateRule(r: Rule) {
@@ -237,7 +263,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
                     var updated = 0
                     var list = rules
                     for (r in incoming) {
-                        val same = list.firstOrNull { it.find == r.find && it.regex == r.regex }
+                        val same = list.firstOrNull { it.find == r.find && it.regex == r.regex && it.speech == r.speech }
                         if (same == null) {
                             list = list + r.copy(id = (list.maxOfOrNull { it.id } ?: 0L) + 1)
                             added++

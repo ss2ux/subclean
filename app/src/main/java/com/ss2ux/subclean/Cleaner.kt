@@ -8,7 +8,8 @@ data class Rule(
     val find: String,
     val replace: String,
     val regex: Boolean = false,
-    val enabled: Boolean = true
+    val enabled: Boolean = true,
+    val speech: Speech = Speech.ALL   // 공통 / 높임 / 반말. 공통이 아니면 그 말투를 고를 때만 적용
 )
 
 /** 반복 압축 등 다듬기 옵션 (설정 화면에서 바꾼다) */
@@ -19,7 +20,8 @@ data class CleanOptions(
     val compressChars: Boolean = true, // ㅋㅋㅋㅋㅋ -> ㅋㅋ
     val compressWords: Boolean = true, // 응 응 응 응 응 -> 응 응
     val compressUnits: Boolean = false, // 하하하하 하하... 같은 2~4글자 덩어리 반복 (띄어쓰기 없는 중/일어용, 실험적)
-    val fixJosa: Boolean = true        // 치환 뒤 조사 보정: 철수가 -> (영수로 바꾸면) 영수가, (민철로 바꾸면) 민철이
+    val fixJosa: Boolean = true,       // 치환 뒤 조사 보정: 철수가 -> (영수로 바꾸면) 영수가, (민철로 바꾸면) 민철이
+    val speech: Speech = Speech.ALL    // 지금 고른 말투 (다듬기 탭 위쪽 칩). 이 말투와 공통 규칙만 적용한다
 )
 
 /**
@@ -56,7 +58,7 @@ class Cleaner(rules: List<Rule>, private val opt: CleanOptions) {
             val repl = norm(r.replace)
             if (r.regex) {
                 try {
-                    regexRules.add(Triple(r, Regex(find), repl))
+                    regexRules.add(Triple(r, Regex(HangulClass.expand(find)), repl))
                 } catch (e: Exception) {
                     problems.add("정규식 오류: ${r.find}")
                 }
