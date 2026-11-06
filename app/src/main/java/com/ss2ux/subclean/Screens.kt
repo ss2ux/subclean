@@ -30,6 +30,9 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.PullToRefreshContainer
+import androidx.compose.material3.rememberPullToRefreshState
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
@@ -57,6 +60,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.nestedScroll.nestedScroll
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.window.Dialog
@@ -117,6 +121,7 @@ fun AppScreen(vm: AppViewModel = viewModel()) {
 // 다듬기 탭: 파일 열기 -> 전/후 미리보기 -> 저장
 // =====================================================================
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun CleanScreen(vm: AppViewModel) {
     val openLauncher = rememberLauncherForActivityResult(OpenDocumentRw()) { uri ->
@@ -129,6 +134,10 @@ private fun CleanScreen(vm: AppViewModel) {
     }
     var onlyChanged by rememberSaveable { mutableStateOf(true) }
     var confirmOverwrite by remember { mutableStateOf(false) }
+    val pullState = rememberPullToRefreshState()
+    if (pullState.isRefreshing) {
+        LaunchedEffect(true) { vm.reloadFile { pullState.endRefresh() } }
+    }
 
     val doc = vm.doc
     val dec = vm.decoded
@@ -158,8 +167,14 @@ private fun CleanScreen(vm: AppViewModel) {
 
             if (pv != null) {
                 Text(
-                    "다듬을 수 있는 ${doc.editableCount}줄 중 ${pv.changedCount}줄이 바뀌어요",
+                    "다듬을 수 있는 ${doc.editableCount}줄 중 ${pv.changedCount}줄이 바뀌어요" +
+                        (if (pv.excludedCount > 0) " (제외 ${pv.excludedCount}줄)" else ""),
                     style = MaterialTheme.typography.bodyMedium
+                )
+                Text(
+                    "바꾸기 싫은 줄은 눌러서 목록에서 빼세요. 아래로 당기면 파일을 다시 읽어요.",
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 for (p in pv.problems) {
                     Text(p, color = MaterialTheme.colorScheme.error, fontSize = 13.sp)
@@ -171,23 +186,32 @@ private fun CleanScreen(vm: AppViewModel) {
                         label = { Text("바뀐 줄만 보기") }
                     )
                     Spacer(Modifier.weight(1f))
+                    if (pv.excludedCount > 0) {
+                        TextButton(onClick = { vm.clearExcluded() }) { Text("제외 취소") }
+                    }
                     TextButton(onClick = { vm.showResult() }) { Text("결과 전체 보기") }
                 }
 
                 val shown = remember(pv, onlyChanged) {
                     if (onlyChanged) pv.rows.filter { it.changed } else pv.rows
                 }
-                if (shown.isEmpty()) {
-                    Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-                        Text(
-                            if (pv.rows.isEmpty()) "다듬을 대사가 없어요" else "바뀌는 줄이 없어요",
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                // 당겨서 새로고침이 먹으려면 영역이 스크롤 가능해야 해서, 빈 상태도 LazyColumn 안에 넣는다
+                Box(Modifier.weight(1f).fillMaxWidth().nestedScroll(pullState.nestedScrollConnection)) {
+                    LazyColumn(Modifier.fillMaxSize()) {
+                        if (shown.isEmpty()) {
+                            item {
+                                Box(Modifier.fillParentMaxSize(), contentAlignment = Alignment.Center) {
+                                    Text(
+                                        if (pv.rows.isEmpty()) "다듬을 대사가 없어요" else "바뀌는 줄이 없어요",
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                        } else {
+                            items(shown, key = { it.index }) { row -> RowCard(row) { vm.toggleExclude(row.index) } }
+                        }
                     }
-                } else {
-                    LazyColumn(Modifier.weight(1f).fillMaxWidth()) {
-                        items(shown, key = { it.index }) { row -> RowCard(row) }
-                    }
+                    PullToRefreshContainer(state = pullState, modifier = Modifier.align(Alignment.TopCenter))
                 }
 
                 Row(
@@ -361,15 +385,26 @@ private fun EncodingRow(vm: AppViewModel, doc: Doc, dec: Decoded) {
 }
 
 @Composable
-private fun RowCard(row: PreviewRow) {
-    Card(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+private fun RowCard(row: PreviewRow, onToggle: () -> Unit) {
+    // 바뀌는 줄(누르면 제외)과 제외한 줄(누르면 다시 포함)만 누를 수 있다
+    val tappable = row.changed || row.excluded
+    Card(
+        Modifier.fillMaxWidth().padding(vertical = 4.dp).let { if (tappable) it.clickable(onClick = onToggle) else it }
+    ) {
         Column(Modifier.padding(12.dp)) {
             Text(
-                "줄 ${row.index + 1}",
+                "줄 ${row.index + 1}" + (if (row.excluded) " · 바꾸지 않음 (누르면 다시 포함)" else if (row.changed) " · 누르면 제외" else ""),
                 fontSize = 11.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-            if (row.changed) {
+            if (row.excluded) {
+                Text(row.before)
+                Text(
+                    row.after.ifEmpty { "(빈 줄)" },
+                    textDecoration = TextDecoration.LineThrough,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            } else if (row.changed) {
                 Text(
                     row.before,
                     textDecoration = TextDecoration.LineThrough,

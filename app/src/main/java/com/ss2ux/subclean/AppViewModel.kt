@@ -16,14 +16,16 @@ import kotlinx.coroutines.withContext
 import java.nio.charset.Charset
 
 /** 미리보기 한 줄: 다듬기 대상 줄의 전/후 */
-class PreviewRow(val index: Int, val before: String, val after: String) {
-    val changed: Boolean get() = before != after
+class PreviewRow(val index: Int, val before: String, val after: String, val excluded: Boolean = false) {
+    /** 실제로 바뀌는 줄인가 (사용자가 제외한 줄은 바뀌지 않는 것으로 친다) */
+    val changed: Boolean get() = !excluded && before != after
 }
 
 class Preview(
     val newBodies: List<String>,   // 모든 줄의 새 본문 (편집 대상이 아닌 줄은 원래 그대로)
     val rows: List<PreviewRow>,    // 편집 대상 줄만
     val changedCount: Int,
+    val excludedCount: Int,        // 사용자가 눌러서 "바꾸지 않기"로 뺀 줄 수
     val problems: List<String>
 )
 
@@ -55,6 +57,10 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
 
     // 저장 후(또는 '결과 전체 보기')에 보여 주는 바뀐 전체 텍스트. null 이면 창이 닫혀 있음
     var resultText by mutableStateOf<String?>(null)
+        private set
+
+    // 사용자가 "이 줄은 바꾸지 않기"로 뺀 줄 번호들 (파일을 새로 열거나 다시 읽으면 비워진다)
+    var excluded by mutableStateOf<Set<Int>>(emptySet())
         private set
 
     var message by mutableStateOf<String?>(null)
@@ -134,7 +140,50 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         val d = Encodings.decode(b, forcedCharset)
         decoded = d
         doc = Doc.parse(n, d.text)
+        excluded = emptySet()   // 줄 번호가 달라질 수 있으니 제외 목록은 비운다
         recompute()
+    }
+
+    /** 다듬기 탭에서 줄을 누르면: 바뀌는 줄은 제외(원래대로 둠), 이미 제외한 줄은 다시 포함 */
+    fun toggleExclude(index: Int) {
+        excluded = if (index in excluded) excluded - index else excluded + index
+        recompute()
+    }
+
+    fun clearExcluded() {
+        if (excluded.isEmpty()) return
+        excluded = emptySet()
+        recompute()
+    }
+
+    /** 열어 둔 파일을 다시 읽는다 (다른 앱에서 고치고 돌아왔을 때). 수동으로 고른 인코딩은 유지한다 */
+    fun reloadFile(onDone: () -> Unit = {}) {
+        val uri = fileUri
+        if (uri == null) {
+            onDone()
+            return
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            var msg: String? = null
+            var data: ByteArray? = null
+            try {
+                data = app.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                if (data == null) msg = "파일을 열 수 없어요"
+                else if (data.size > 20_000_000) { msg = "파일이 너무 커요 (20MB 초과)"; data = null }
+            } catch (e: Exception) {
+                msg = "다시 불러오기 실패: ${e.message ?: e}"
+                data = null
+            }
+            withContext(Dispatchers.Main) {
+                if (data != null) {
+                    bytes = data
+                    reparse()
+                    msg = "다시 불러왔어요"
+                }
+                message = msg
+                onDone()
+            }
+        }
     }
 
     // ---------------- 다듬기 미리보기 ----------------
@@ -146,6 +195,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
             return
         }
         val s = settings
+        val ex = excluded
         // 공통 규칙 + 지금 고른 말투의 규칙만 쓴다 (저장 순서는 그대로 유지: 정규식은 순서대로 적용되므로)
         val r = rules.filter { it.speech == Speech.ALL || it.speech == s.speech }
         job?.cancel()
@@ -154,17 +204,19 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
             val bodies = ArrayList<String>(d.lines.size)
             val rows = ArrayList<PreviewRow>()
             var changed = 0
+            var excludedCount = 0
             for ((i, ln) in d.lines.withIndex()) {
                 if (!ln.editable) {
                     bodies.add(ln.body)
                 } else {
                     val after = cleaner.clean(ln.body)
-                    bodies.add(after)
-                    rows.add(PreviewRow(i, ln.body, after))
-                    if (after != ln.body) changed++
+                    val skip = i in ex && after != ln.body
+                    bodies.add(if (skip) ln.body else after)   // 제외한 줄은 원래 그대로 둔다
+                    rows.add(PreviewRow(i, ln.body, after, skip))
+                    if (skip) excludedCount++ else if (after != ln.body) changed++
                 }
             }
-            val p = Preview(bodies, rows, changed, cleaner.problems.distinct())
+            val p = Preview(bodies, rows, changed, excludedCount, cleaner.problems.distinct())
             withContext(Dispatchers.Main) { preview = p }
         }
     }
