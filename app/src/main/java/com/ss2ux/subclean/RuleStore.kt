@@ -144,6 +144,11 @@ class SettingsStore(context: Context) {
         )
     }
 
+    /** 마지막으로 자동 설치한 기본 말투 규칙 팩의 버전 (0 = 아직 설치 안 함) */
+    var speechPackVersion: Int
+        get() = p.getInt("speechPackVersion", 0)
+        set(v) { p.edit().putInt("speechPackVersion", v).apply() }
+
     fun save(o: CleanOptions) {
         p.edit()
             .putInt("threshold", o.threshold)

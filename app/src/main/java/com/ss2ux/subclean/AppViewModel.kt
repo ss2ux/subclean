@@ -27,6 +27,9 @@ class Preview(
     val problems: List<String>
 )
 
+/** 앱에 들어 있는 말투 팩의 버전. speech_pack.tsv 를 고쳐서 새로 넣어야 할 때 숫자를 올린다 */
+const val SPEECH_PACK_VERSION = 1
+
 class AppViewModel(private val app: Application) : AndroidViewModel(app) {
     private val ruleStore = RuleStore(app)
     private val settingsStore = SettingsStore(app)
@@ -60,6 +63,11 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
 
     private var bytes: ByteArray? = null
     private var job: Job? = null
+
+    init {
+        // 처음 실행하거나, 앱 업데이트로 말투 팩이 새로워졌을 때 기본 말투 규칙을 자동으로 넣는다
+        if (settingsStore.speechPackVersion < SPEECH_PACK_VERSION) autoInstallSpeechPack()
+    }
 
     fun clearMessage() { message = null }
 
@@ -217,27 +225,47 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         commitRules(rules + Rule(nextId(), find, replace, regex, true, speech))
     }
 
-    /** 앱에 들어 있는 기본 말투 규칙 팩(높임/반말)을 규칙 목록 끝에 추가한다. 이미 있는 규칙은 건드리지 않는다 */
-    fun installSpeechPack() {
-        viewModelScope.launch(Dispatchers.IO) {
+    /**
+     * 말투 팩(res/raw/speech_pack.tsv)을 읽어 규칙 목록 끝에 없는 것만 추가한다. 이미 있는 규칙은 건드리지 않는다.
+     * 반환: 새로 추가한 개수. 팩을 읽지 못하면 예외.
+     */
+    private fun mergeSpeechPack(): Int {
+        val text = app.resources.openRawResource(R.raw.speech_pack).use { String(it.readBytes(), Charsets.UTF_8) }
+        val incoming = RuleStore.fromTsv(text, nextId())
+        var list = rules
+        var added = 0
+        for (r in incoming) {
+            val exists = list.any { it.find == r.find && it.regex == r.regex && it.speech == r.speech }
+            if (!exists) {
+                list = list + r.copy(id = (list.maxOfOrNull { it.id } ?: 0L) + 1)
+                added++
+            }
+        }
+        if (added > 0) commitRules(list)
+        return added
+    }
+
+    /** 앱을 처음 켤 때(또는 팩이 갱신된 뒤 처음 켤 때) 조용히 팩을 넣는다. 실패하면 다음 실행 때 다시 시도한다 */
+    private fun autoInstallSpeechPack() {
+        viewModelScope.launch(Dispatchers.Main) {
             try {
-                val text = app.resources.openRawResource(R.raw.speech_pack).use { String(it.readBytes(), Charsets.UTF_8) }
-                withContext(Dispatchers.Main) {
-                    val incoming = RuleStore.fromTsv(text, nextId())
-                    var list = rules
-                    var added = 0
-                    for (r in incoming) {
-                        val exists = list.any { it.find == r.find && it.regex == r.regex && it.speech == r.speech }
-                        if (!exists) {
-                            list = list + r.copy(id = (list.maxOfOrNull { it.id } ?: 0L) + 1)
-                            added++
-                        }
-                    }
-                    if (added > 0) commitRules(list)
-                    message = if (added > 0) "기본 말투 규칙 ${added}개를 추가했어요" else "기본 말투 규칙이 이미 모두 들어 있어요"
-                }
+                mergeSpeechPack()
+                settingsStore.speechPackVersion = SPEECH_PACK_VERSION
             } catch (e: Exception) {
-                withContext(Dispatchers.Main) { message = "기본 규칙을 불러오지 못했어요: ${e.message ?: e}" }
+                message = "기본 말투 규칙을 불러오지 못했어요: ${e.message ?: e}"
+            }
+        }
+    }
+
+    /** 규칙 탭의 '말투 팩 다시 넣기' 버튼: 지웠거나 빠진 기본 규칙을 다시 채운다 */
+    fun installSpeechPack() {
+        viewModelScope.launch(Dispatchers.Main) {
+            message = try {
+                val added = mergeSpeechPack()
+                settingsStore.speechPackVersion = SPEECH_PACK_VERSION
+                if (added > 0) "기본 말투 규칙 ${added}개를 추가했어요" else "기본 말투 규칙이 이미 모두 들어 있어요"
+            } catch (e: Exception) {
+                "기본 규칙을 불러오지 못했어요: ${e.message ?: e}"
             }
         }
     }

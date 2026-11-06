@@ -262,6 +262,13 @@ private fun SpeechRow(vm: AppViewModel) {
             fontSize = 12.sp,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
+        if (cur != Speech.ALL && vm.rules.none { it.speech == cur }) {
+            Text(
+                "이 말투의 규칙이 하나도 없어요. 규칙 탭의 '말투 팩 다시 넣기'를 눌러 주세요.",
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.error
+            )
+        }
     }
 }
 
@@ -428,7 +435,7 @@ private fun RulesScreen(vm: AppViewModel) {
             Button(onClick = { adding = true }) { Text("규칙 추가") }
             TextButton(onClick = { importLauncher.launch(arrayOf("*/*")) }) { Text("가져오기") }
             TextButton(onClick = { exportLauncher.launch("치환규칙.tsv") }) { Text("내보내기") }
-            TextButton(onClick = { confirmPack = true }) { Text("말투 팩") }
+            TextButton(onClick = { confirmPack = true }) { Text("말투 팩 다시 넣기") }
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             val names = listOf("전체", "공통", "높임", "반말")
@@ -504,10 +511,10 @@ private fun RulesScreen(vm: AppViewModel) {
     if (confirmPack) {
         AlertDialog(
             onDismissRequest = { confirmPack = false },
-            title = { Text("기본 말투 규칙을 넣을까요?") },
+            title = { Text("기본 말투 규칙을 다시 넣을까요?") },
             text = {
                 Text(
-                    "높임(해요체로 통일)과 반말(해체로 통일) 규칙 묶음을 규칙 목록 끝에 추가해요. " +
+                    "기본 말투 규칙은 앱을 켤 때 자동으로 들어가 있어요. 지웠거나 빠진 규칙이 있을 때만 다시 넣어 주세요. 없는 규칙만 목록 끝에 추가해요. " +
                         "이미 들어 있는 규칙은 건드리지 않고, 기존 규칙은 전부 그대로예요. " +
                         "정규식 규칙은 위에서 아래 순서대로 적용되니 순서는 바꾸지 마세요."
                 )
