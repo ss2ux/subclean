@@ -1,0 +1,511 @@
+package com.ss2ux.subclean
+
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.FolderOpen
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Slider
+import androidx.compose.material3.Switch
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.lifecycle.viewmodel.compose.viewModel
+import kotlin.math.roundToInt
+
+@Composable
+fun AppScreen(vm: AppViewModel = viewModel()) {
+    var tab by rememberSaveable { mutableIntStateOf(0) }
+    val snack = remember { SnackbarHostState() }
+
+    LaunchedEffect(vm.message) {
+        val m = vm.message
+        if (m != null) {
+            snack.showSnackbar(m)
+            vm.clearMessage()
+        }
+    }
+
+    Scaffold(
+        snackbarHost = { SnackbarHost(snack) },
+        bottomBar = {
+            NavigationBar {
+                NavigationBarItem(
+                    selected = tab == 0, onClick = { tab = 0 },
+                    icon = { Icon(Icons.Default.FolderOpen, contentDescription = null) },
+                    label = { Text("다듬기") }
+                )
+                NavigationBarItem(
+                    selected = tab == 1, onClick = { tab = 1 },
+                    icon = { Icon(Icons.Default.Edit, contentDescription = null) },
+                    label = { Text("규칙 ${vm.rules.size}") }
+                )
+                NavigationBarItem(
+                    selected = tab == 2, onClick = { tab = 2 },
+                    icon = { Icon(Icons.Default.Settings, contentDescription = null) },
+                    label = { Text("설정") }
+                )
+            }
+        }
+    ) { pad ->
+        Box(Modifier.padding(pad).fillMaxSize()) {
+            when (tab) {
+                0 -> CleanScreen(vm)
+                1 -> RulesScreen(vm)
+                else -> SettingsScreen(vm)
+            }
+        }
+    }
+}
+
+// =====================================================================
+// 다듬기 탭: 파일 열기 -> 전/후 미리보기 -> 저장
+// =====================================================================
+
+@Composable
+private fun CleanScreen(vm: AppViewModel) {
+    val openLauncher = rememberLauncherForActivityResult(OpenDocumentRw()) { uri ->
+        if (uri != null) vm.openFile(uri)
+    }
+    val saveAsLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/octet-stream")
+    ) { uri ->
+        if (uri != null) vm.save(uri, false)
+    }
+    var onlyChanged by rememberSaveable { mutableStateOf(true) }
+    var confirmOverwrite by remember { mutableStateOf(false) }
+
+    val doc = vm.doc
+    val dec = vm.decoded
+    val pv = vm.preview
+
+    Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
+        Spacer(Modifier.height(12.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Button(onClick = { openLauncher.launch(arrayOf("*/*")) }, enabled = !vm.busy) {
+                Icon(Icons.Default.FolderOpen, contentDescription = null)
+                Spacer(Modifier.width(8.dp))
+                Text("파일 열기")
+            }
+            Spacer(Modifier.width(12.dp))
+            Text(
+                vm.fileName ?: "자막 파일(.srt .vtt .lrc .txt)을 열어 주세요",
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f)
+            )
+        }
+
+        if (doc != null && dec != null) {
+            EncodingRow(vm, doc, dec)
+
+            if (pv != null) {
+                Text(
+                    "다듬을 수 있는 ${doc.editableCount}줄 중 ${pv.changedCount}줄이 바뀌어요",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                for (p in pv.problems) {
+                    Text(p, color = MaterialTheme.colorScheme.error, fontSize = 13.sp)
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    FilterChip(
+                        selected = onlyChanged,
+                        onClick = { onlyChanged = !onlyChanged },
+                        label = { Text("바뀐 줄만 보기") }
+                    )
+                }
+
+                val shown = remember(pv, onlyChanged) {
+                    if (onlyChanged) pv.rows.filter { it.changed } else pv.rows
+                }
+                if (shown.isEmpty()) {
+                    Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                        Text(
+                            if (pv.rows.isEmpty()) "다듬을 대사가 없어요" else "바뀌는 줄이 없어요",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                } else {
+                    LazyColumn(Modifier.weight(1f).fillMaxWidth()) {
+                        items(shown, key = { it.index }) { row -> RowCard(row) }
+                    }
+                }
+
+                Row(
+                    Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = { saveAsLauncher.launch(suggestName(vm.fileName)) },
+                        enabled = !vm.busy,
+                        modifier = Modifier.weight(1f)
+                    ) { Text("다른 이름으로 저장") }
+                    Button(
+                        onClick = { confirmOverwrite = true },
+                        enabled = !vm.busy && pv.changedCount > 0,
+                        modifier = Modifier.weight(1f)
+                    ) { Text("원본에 덮어쓰기") }
+                }
+            } else {
+                Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                    Text("다듬는 중...")
+                }
+            }
+        } else {
+            Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                Text(
+                    "규칙 탭에서 치환 목록을 만들고,\n파일을 열어 바뀌는 모습을 확인한 뒤 저장하세요.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+    }
+
+    if (confirmOverwrite) {
+        AlertDialog(
+            onDismissRequest = { confirmOverwrite = false },
+            title = { Text("원본에 덮어쓸까요?") },
+            text = { Text("원본 파일이 다듬은 내용으로 바뀌고 되돌릴 수 없어요. 안전하게 하려면 '다른 이름으로 저장'을 쓰세요.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmOverwrite = false
+                    vm.save(null, true)
+                }) { Text("덮어쓰기") }
+            },
+            dismissButton = { TextButton(onClick = { confirmOverwrite = false }) { Text("취소") } }
+        )
+    }
+}
+
+private fun suggestName(name: String?): String {
+    val n = name ?: "subtitle.txt"
+    val dot = n.lastIndexOf('.')
+    return if (dot > 0) n.substring(0, dot) + "_clean" + n.substring(dot) else n + "_clean"
+}
+
+@Composable
+private fun EncodingRow(vm: AppViewModel, doc: Doc, dec: Decoded) {
+    var menu by remember { mutableStateOf(false) }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            "${doc.kind.label} · ${Encodings.label(dec.charset)}" + (if (dec.auto) " (자동 감지)" else ""),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.weight(1f)
+        )
+        Box {
+            TextButton(onClick = { menu = true }) { Text("인코딩 변경") }
+            DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                DropdownMenuItem(
+                    text = { Text("자동 감지") },
+                    onClick = { vm.setEncoding(null); menu = false }
+                )
+                for (o in Encodings.options) {
+                    DropdownMenuItem(
+                        text = { Text(o.label) },
+                        onClick = { vm.setEncoding(o.charset); menu = false }
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun RowCard(row: PreviewRow) {
+    Card(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+        Column(Modifier.padding(12.dp)) {
+            Text(
+                "줄 ${row.index + 1}",
+                fontSize = 11.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            if (row.changed) {
+                Text(
+                    row.before,
+                    textDecoration = TextDecoration.LineThrough,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Text(row.after.ifEmpty { "(빈 줄)" }, color = MaterialTheme.colorScheme.primary)
+            } else {
+                Text(row.before)
+            }
+        }
+    }
+}
+
+// =====================================================================
+// 규칙 탭: 치환 목록 관리
+// =====================================================================
+
+@Composable
+private fun RulesScreen(vm: AppViewModel) {
+    var query by rememberSaveable { mutableStateOf("") }
+    var editing by remember { mutableStateOf<Rule?>(null) }
+    var adding by remember { mutableStateOf(false) }
+    var deleting by remember { mutableStateOf<Rule?>(null) }
+
+    val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) vm.importRules(uri)
+    }
+    val exportLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/octet-stream")
+    ) { uri ->
+        if (uri != null) vm.exportRules(uri)
+    }
+
+    val q = query.trim()
+    val shown = remember(vm.rules, q) {
+        if (q.isEmpty()) vm.rules
+        else vm.rules.filter { it.find.contains(q, ignoreCase = true) || it.replace.contains(q, ignoreCase = true) }
+    }
+
+    Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
+        Spacer(Modifier.height(12.dp))
+        OutlinedTextField(
+            value = query,
+            onValueChange = { query = it },
+            label = { Text("규칙 검색") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth()
+        )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Button(onClick = { adding = true }) { Text("규칙 추가") }
+            TextButton(onClick = { importLauncher.launch(arrayOf("*/*")) }) { Text("가져오기") }
+            TextButton(onClick = { exportLauncher.launch("치환규칙.tsv") }) { Text("내보내기") }
+        }
+        Text(
+            "규칙 ${vm.rules.size}개 (켜짐 ${vm.rules.count { it.enabled }}개)",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Spacer(Modifier.height(4.dp))
+
+        if (shown.isEmpty()) {
+            Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                Text(
+                    if (vm.rules.isEmpty()) "아직 규칙이 없어요" else "검색 결과가 없어요",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        } else {
+            LazyColumn(Modifier.weight(1f).fillMaxWidth()) {
+                items(shown, key = { it.id }) { r ->
+                    Row(
+                        Modifier.fillMaxWidth().clickable { editing = r }.padding(vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Switch(checked = r.enabled, onCheckedChange = { vm.updateRule(r.copy(enabled = it)) })
+                        Spacer(Modifier.width(12.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                r.find + "  →  " + r.replace.ifEmpty { "(삭제)" },
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            if (r.regex) {
+                                Text("정규식", fontSize = 11.sp, color = MaterialTheme.colorScheme.primary)
+                            }
+                        }
+                        IconButton(onClick = { deleting = r }) {
+                            Icon(Icons.Default.Delete, contentDescription = "삭제")
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if (adding) {
+        RuleDialog(
+            initial = null,
+            onDismiss = { adding = false },
+            onSave = { f, r, rx -> vm.addRule(f, r, rx); adding = false }
+        )
+    }
+    editing?.let { cur ->
+        RuleDialog(
+            initial = cur,
+            onDismiss = { editing = null },
+            onSave = { f, r, rx -> vm.updateRule(cur.copy(find = f, replace = r, regex = rx)); editing = null }
+        )
+    }
+    deleting?.let { cur ->
+        AlertDialog(
+            onDismissRequest = { deleting = null },
+            title = { Text("규칙을 지울까요?") },
+            text = { Text(cur.find + "  →  " + cur.replace.ifEmpty { "(삭제)" }) },
+            confirmButton = {
+                TextButton(onClick = { vm.deleteRule(cur.id); deleting = null }) { Text("지우기") }
+            },
+            dismissButton = { TextButton(onClick = { deleting = null }) { Text("취소") } }
+        )
+    }
+}
+
+@Composable
+private fun RuleDialog(
+    initial: Rule?,
+    onDismiss: () -> Unit,
+    onSave: (String, String, Boolean) -> Unit
+) {
+    var find by remember { mutableStateOf(initial?.find ?: "") }
+    var replace by remember { mutableStateOf(initial?.replace ?: "") }
+    var regex by remember { mutableStateOf(initial?.regex ?: false) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(if (initial == null) "규칙 추가" else "규칙 수정") },
+        text = {
+            Column {
+                OutlinedTextField(
+                    value = find, onValueChange = { find = it },
+                    label = { Text("찾을 말") }, modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = replace, onValueChange = { replace = it },
+                    label = { Text("바꿀 말 (비우면 삭제)") }, modifier = Modifier.fillMaxWidth()
+                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(checked = regex, onCheckedChange = { regex = it })
+                    Text("정규식으로 처리")
+                }
+                if (regex) {
+                    Text(
+                        "바꿀 말에서 \$1 처럼 괄호 묶음을 다시 쓸 수 있어요.",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { onSave(find, replace, regex) }, enabled = find.isNotEmpty()) { Text("저장") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("취소") } }
+    )
+}
+
+// =====================================================================
+// 설정 탭: 반복 압축 등
+// =====================================================================
+
+@Composable
+private fun SettingsScreen(vm: AppViewModel) {
+    val o = vm.settings
+    Column(
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)
+    ) {
+        Text("반복 압축", style = MaterialTheme.typography.titleMedium)
+        Spacer(Modifier.height(8.dp))
+        Text("같은 글자·단어가 ${o.threshold}번 이상 이어지면 압축해요")
+        Slider(
+            value = o.threshold.toFloat(),
+            onValueChange = { vm.updateSettings(o.copy(threshold = it.roundToInt())) },
+            valueRange = 3f..10f,
+            steps = 6
+        )
+        val keepMax = o.threshold - 1
+        if (keepMax > 1) {
+            Text("압축하고 ${o.keep.coerceIn(1, keepMax)}개만 남겨요")
+            Slider(
+                value = o.keep.coerceIn(1, keepMax).toFloat(),
+                onValueChange = { vm.updateSettings(o.copy(keep = it.roundToInt())) },
+                valueRange = 1f..keepMax.toFloat(),
+                steps = keepMax - 2
+            )
+        } else {
+            Text("압축하고 1개만 남겨요")
+        }
+        Spacer(Modifier.height(8.dp))
+        SettingSwitch(
+            "한 글자·기호 반복", "ㅋㅋㅋㅋㅋㅋ → ㅋㅋ, ?????? → ??, 哈哈哈哈哈 → 哈哈 (숫자는 건드리지 않아요)",
+            o.compressChars
+        ) { vm.updateSettings(o.copy(compressChars = it)) }
+        SettingSwitch(
+            "단어 반복", "응 응 응 응 응 → 응 응 (띄어쓰기로 구분되는 단어)",
+            o.compressWords
+        ) { vm.updateSettings(o.copy(compressWords = it)) }
+        SettingSwitch(
+            "여러 글자 덩어리 반복 (실험)", "너무너무너무너무너무 → 너무너무. 띄어쓰기 없는 중국어·일본어용. 엉뚱하게 줄어드는지 미리보기로 확인하세요",
+            o.compressUnits
+        ) { vm.updateSettings(o.copy(compressUnits = it)) }
+
+        Spacer(Modifier.height(16.dp))
+        Text("글자 정리", style = MaterialTheme.typography.titleMedium)
+        SettingSwitch(
+            "유니코드 정규화 (NFC)", "분리된 한글 자모·일본어 탁점 등을 하나로 합쳐서 치환 규칙이 빠짐없이 맞게 해요",
+            o.normalize
+        ) { vm.updateSettings(o.copy(normalize = it)) }
+
+        Spacer(Modifier.height(16.dp))
+        Text(
+            "이 앱은 인터넷 권한이 없어 모든 처리가 기기 안에서만 이루어져요.",
+            fontSize = 12.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}
+
+@Composable
+private fun SettingSwitch(title: String, desc: String, checked: Boolean, onChange: (Boolean) -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().padding(vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(title)
+            Text(desc, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        Spacer(Modifier.width(12.dp))
+        Switch(checked = checked, onCheckedChange = onChange)
+    }
+}
