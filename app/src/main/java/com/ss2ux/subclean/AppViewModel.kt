@@ -30,7 +30,7 @@ class Preview(
 )
 
 /** 앱에 들어 있는 말투 팩의 버전. speech_pack.tsv 를 고쳐서 새로 넣어야 할 때 숫자를 올린다 */
-const val SPEECH_PACK_VERSION = 2   // 2: 높임 '너 -> 당신' 규칙 추가
+const val SPEECH_PACK_VERSION = 3   // 2: 높임 '너 -> 당신' 규칙 추가, 3: 독백(...)에는 높임 안 붙임 + 반말 '당신 -> 너'
 
 class AppViewModel(private val app: Application) : AndroidViewModel(app) {
     private val ruleStore = RuleStore(app)
@@ -290,6 +290,15 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         val incoming = RuleStore.fromTsv(text, nextId())
         var list = rules
         var added = 0
+        // 팩 버전 3 이전에 설치된 옛 높임 규칙은 '...' 독백에도 요를 붙였다. 옛 문장 끝 패턴이 든 높임 규칙과
+        // 새 팩의 높임 규칙은 한 번 지우고, 새 팩이 올바른 순서로 다시 넣게 한다.
+        if (settingsStore.speechPackVersion < 3) {
+            val hFinds = incoming.filter { it.speech == Speech.HONORIFIC && it.regex }.map { it.find }.toSet()
+            list = list.filterNot {
+                it.speech == Speech.HONORIFIC && it.regex && (it.find in hFinds || it.find.contains("(?=[.!?…~]+"))
+            }
+        }
+        val removed = rules.size - list.size
         for (r in incoming) {
             val exists = list.any { it.find == r.find && it.regex == r.regex && it.speech == r.speech }
             if (!exists) {
@@ -297,7 +306,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
                 added++
             }
         }
-        if (added > 0) commitRules(list)
+        if (added > 0 || removed > 0) commitRules(list)
         return added
     }
 

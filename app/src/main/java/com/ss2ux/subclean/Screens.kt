@@ -44,7 +44,6 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.pulltorefresh.PullToRefreshContainer
 import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
@@ -228,7 +227,6 @@ private fun CleanScreen(vm: AppViewModel) {
                         }
                         ListScrollbar(listState)
                     }
-                    PullToRefreshContainer(state = pullState, modifier = Modifier.align(Alignment.TopCenter))
                 }
 
                 Row(
@@ -532,7 +530,7 @@ private fun RulesScreen(vm: AppViewModel) {
 
     val q = query.trim()
     val sort = vm.ruleSort
-    val sortNames = listOf("최신순", "오래된순", "가나다순")
+    val sortNames = listOf("최신순(등록 내림차순)", "오래된순(등록 오름차순)", "가나다순")
     val listState = rememberLazyListState()
     var prevSize by remember { mutableIntStateOf(vm.rules.size) }
     // 규칙이 새로 생기면(추가·가져오기·팩) 최신순에서는 맨 위로 올려서 바로 보이게 한다
@@ -592,7 +590,7 @@ private fun RulesScreen(vm: AppViewModel) {
             )
             var sortMenu by remember { mutableStateOf(false) }
             Box {
-                TextButton(onClick = { sortMenu = true }) { Text("정렬: ${sortNames[sort]}") }
+                TextButton(onClick = { sortMenu = true }) { Text("정렬: ${sortNames[sort].substringBefore("(")}") }
                 DropdownMenu(expanded = sortMenu, onDismissRequest = { sortMenu = false }) {
                     for ((i, nm) in sortNames.withIndex()) {
                         DropdownMenuItem(
