@@ -812,6 +812,48 @@ private fun SettingsScreen(vm: AppViewModel) {
         ) { vm.updateSettings(o.copy(normalize = it)) }
 
         Spacer(Modifier.height(16.dp))
+        Text("제외 단어", style = MaterialTheme.typography.titleMedium)
+        Text(
+            "여기 넣은 말은 어떤 규칙(일반·정규식·말투·조사 보정)과 반복 압축에도 바뀌지 않아요. 단어 안에 들어 있는 부분도 지켜요. 여러 개는 쉼표(,)로 구분해서 한 번에 넣을 수 있어요.",
+            fontSize = 12.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        var protectInput by remember { mutableStateOf("") }
+        Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            OutlinedTextField(
+                value = protectInput,
+                onValueChange = { protectInput = it },
+                label = { Text("제외할 단어") },
+                singleLine = true,
+                modifier = Modifier.weight(1f)
+            )
+            Spacer(Modifier.width(8.dp))
+            Button(onClick = {
+                val add = protectInput.split(',', '\n').map { it.trim() }.filter { it.isNotEmpty() }
+                if (add.isNotEmpty()) {
+                    vm.updateSettings(o.copy(protect = (o.protect + add).distinct()))
+                    protectInput = ""
+                }
+            }) { Text("추가") }
+        }
+        if (o.protect.isEmpty()) {
+            Text(
+                "제외 단어가 없어요",
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 8.dp)
+            )
+        }
+        for (w in o.protect) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text(w, modifier = Modifier.weight(1f))
+                IconButton(onClick = { vm.updateSettings(o.copy(protect = o.protect - w)) }) {
+                    Icon(Icons.Default.Close, contentDescription = "지우기")
+                }
+            }
+        }
+
+        Spacer(Modifier.height(16.dp))
         Text(
             "이 앱은 인터넷 권한이 없어 모든 처리가 기기 안에서만 이루어져요.",
             fontSize = 12.sp,

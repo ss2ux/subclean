@@ -21,6 +21,7 @@ data class CleanOptions(
     val compressWords: Boolean = true, // 응 응 응 응 응 -> 응 응
     val compressUnits: Boolean = false, // 하하하하 하하... 같은 2~4글자 덩어리 반복 (띄어쓰기 없는 중/일어용, 실험적)
     val fixJosa: Boolean = true,       // 치환 뒤 조사 보정: 철수가 -> (영수로 바꾸면) 영수가, (민철로 바꾸면) 민철이
+    val protect: List<String> = emptyList(), // 제외 단어: 이 말이 들어 있는 부분은 어떤 규칙·압축도 건드리지 않는다
     val speech: Speech = Speech.ALL    // 지금 고른 말투 (다듬기 탭 위쪽 칩). 이 말투와 공통 규칙만 적용한다
 )
 
@@ -50,6 +51,14 @@ class Cleaner(rules: List<Rule>, private val opt: CleanOptions) {
     private val charRe = Regex("([^\\p{Nd}\\s])\\1{${n - 1},}")
     private val wordRe = Regex("(?<!\\S)(\\S+)(?:[ \\t\\u3000]+\\1){${n - 1},}(?!\\S)")
     private val unitRe = Regex("([^\\p{Nd}\\s]{2,4}?)\\1{${n - 1},}")
+
+    // 제외 단어: 치환 전에 칸막이 글자(사용자 지정 영역 문자)로 바꿔 두었다가 마지막에 되돌린다
+    private val protectRe: Regex? = opt.protect.map { norm(it) }.filter { it.isNotEmpty() }.distinct()
+        .sortedByDescending { it.length }
+        .takeIf { it.isNotEmpty() }
+        ?.let { w -> Regex(w.joinToString("|") { esc(it) }) }
+    private val PUA = 0xE000
+    private val PUA_MAX = 6000
 
     init {
         for (r in rules) {
@@ -111,6 +120,17 @@ class Cleaner(rules: List<Rule>, private val opt: CleanOptions) {
     fun clean(text: String): String {
         var s = norm(text)
 
+        // 제외 단어 보호 (줄에 원래 칸막이 글자가 있으면 보호하지 않는다)
+        var saved: ArrayList<String>? = null
+        if (protectRe != null && s.none { it.code in PUA..(PUA + PUA_MAX) }) {
+            val list = ArrayList<String>()
+            s = protectRe.replace(s) { m ->
+                if (list.size >= PUA_MAX) m.value
+                else { list.add(m.value); (PUA + list.size - 1).toChar().toString() }
+            }
+            if (list.isNotEmpty()) saved = list
+        }
+
         plainRegex?.let { re -> s = replacePlain(s, re) }
 
         for ((rule, re, repl) in regexRules) {
@@ -127,6 +147,15 @@ class Cleaner(rules: List<Rule>, private val opt: CleanOptions) {
         if (opt.compressChars) s = charRe.replace(s) { m -> m.groupValues[1].repeat(keep) }
         if (opt.compressWords) s = wordRe.replace(s) { m -> List(keep) { m.groupValues[1] }.joinToString(" ") }
         if (opt.compressUnits) s = unitRe.replace(s) { m -> m.groupValues[1].repeat(keep) }
+
+        saved?.let { list ->
+            val sb = StringBuilder(s.length + 16)
+            for (ch in s) {
+                val k = ch.code - PUA
+                if (k in list.indices) sb.append(list[k]) else sb.append(ch)
+            }
+            s = sb.toString()
+        }
         return s
     }
 }
