@@ -82,14 +82,14 @@ fun SplitScreen(vm: AppViewModel) {
             OutlinedButton(onClick = { vm.importOpenSubtitleToSplit() }, modifier = Modifier.weight(1f)) {
                 Text("열린 자막 가져오기", maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
-            IconButton(onClick = { vm.setSplitText("") }, enabled = vm.splitText.isNotEmpty()) {
+            IconButton(onClick = { vm.updateSplitText("") }, enabled = vm.splitText.isNotEmpty()) {
                 Icon(Icons.Default.Delete, contentDescription = "전체 지우기")
             }
         }
 
         OutlinedTextField(
             value = vm.splitText,
-            onValueChange = { vm.setSplitText(it) },
+            onValueChange = { vm.updateSplitText(it) },
             modifier = Modifier.fillMaxWidth().padding(top = 8.dp).height(150.dp),
             placeholder = { Text("DeepL에 넣을 긴 텍스트를 붙여 넣거나, 파일을 여세요") }
         )
@@ -102,7 +102,7 @@ fun SplitScreen(vm: AppViewModel) {
         Slider(
             value = sliderValue,
             onValueChange = { sliderValue = it },
-            onValueChangeFinished = { vm.setSplitLimit(sliderValue.roundToInt()) },
+            onValueChangeFinished = { vm.updateSplitLimit(sliderValue.roundToInt()) },
             valueRange = 1000f..5000f,
             steps = 39   // 100자 단위
         )

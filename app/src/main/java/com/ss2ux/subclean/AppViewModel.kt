@@ -284,12 +284,12 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
 
     // ---------------- 분할 ----------------
 
-    fun setSplitText(t: String) {
+    fun updateSplitText(t: String) {
         splitText = t
         resplit()
     }
 
-    fun setSplitLimit(v: Int) {
+    fun updateSplitLimit(v: Int) {
         val c = v.coerceIn(1000, Splitter.MAX_LIMIT)
         splitLimit = c
         settingsStore.splitLimit = c
@@ -323,7 +323,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
             message = "다듬기 탭에서 자막 파일을 먼저 열어 주세요"
             return
         }
-        setSplitText(d.lines.filter { it.editable }.joinToString("\n") { it.body })
+        updateSplitText(d.lines.filter { it.editable }.joinToString("\n") { it.body })
         message = "대사 ${d.editableCount}줄을 가져왔어요"
     }
 
@@ -353,7 +353,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
                 msg = "열기 실패: ${e.message ?: e}"
             }
             withContext(Dispatchers.Main) {
-                if (body != null) setSplitText(body)
+                if (body != null) updateSplitText(body)
                 message = msg
             }
         }
