@@ -205,6 +205,9 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         job?.cancel()
         job = viewModelScope.launch(Dispatchers.Default) {
             val cleaner = Cleaner(r, s)
+            // '...' 이나 '…' 가 들어 있는 줄은 독백으로 보고 높임/반말 규칙을 빼고 공통 규칙만 적용한다
+            val commonCleaner = if (s.speech == Speech.ALL) cleaner else Cleaner(r.filter { it.speech == Speech.ALL }, s)
+            val monologue = Regex("\\.\\.|…")
             val bodies = ArrayList<String>(d.lines.size)
             val rows = ArrayList<PreviewRow>()
             var changed = 0
@@ -213,14 +216,14 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
                 if (!ln.editable) {
                     bodies.add(ln.body)
                 } else {
-                    val after = cleaner.clean(ln.body)
+                    val after = (if (monologue.containsMatchIn(ln.body)) commonCleaner else cleaner).clean(ln.body)
                     val skip = i in ex && after != ln.body
                     bodies.add(if (skip) ln.body else after)   // 제외한 줄은 원래 그대로 둔다
                     rows.add(PreviewRow(i, ln.body, after, skip))
                     if (skip) excludedCount++ else if (after != ln.body) changed++
                 }
             }
-            val p = Preview(bodies, rows, changed, excludedCount, cleaner.problems.distinct())
+            val p = Preview(bodies, rows, changed, excludedCount, (cleaner.problems + commonCleaner.problems).distinct())
             withContext(Dispatchers.Main) { preview = p }
         }
     }

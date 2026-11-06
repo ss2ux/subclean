@@ -2,6 +2,8 @@ package com.ss2ux.subclean
 
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
+import android.provider.DocumentsContract
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -20,6 +22,10 @@ class OpenDocumentRw : ActivityResultContracts.OpenDocument() {
             Intent.FLAG_GRANT_READ_URI_PERMISSION or
                 Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
                 Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
+        ).putExtra(
+            // 파일 선택기를 열면 다운로드 폴더부터 보여 준다
+            DocumentsContract.EXTRA_INITIAL_URI,
+            Uri.parse("content://com.android.externalstorage.documents/document/primary%3ADownload")
         )
 }
 
