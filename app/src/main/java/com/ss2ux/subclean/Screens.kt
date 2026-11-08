@@ -86,6 +86,9 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlin.math.roundToInt
 
+/** 분할 탭이 필요한 글자 수 기준 (DeepL 무료 한도) */
+private const val SPLIT_LIMIT_CHARS = 5000
+
 @Composable
 fun AppScreen(vm: AppViewModel = viewModel()) {
     var tab by rememberSaveable { mutableIntStateOf(0) }
@@ -225,10 +228,24 @@ private fun CleanScreen(vm: AppViewModel) {
             EncodingRow(vm, doc, dec)
 
             if (pv != null) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        "다듬을 수 있는 ${doc.editableCount}줄 중 ${pv.changedCount}줄이 바뀌어요" +
+                            (if (pv.excludedCount > 0) " (제외 ${pv.excludedCount}줄)" else ""),
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.weight(1f)
+                    )
+                    if (pv.excludedCount > 0) {
+                        TextButton(onClick = { vm.clearExcluded() }) { Text("제외 취소") }
+                    }
+                }
+                // 결과 글자 수: 5천자를 넘으면 분할 탭이 필요하다
+                val over = pv.totalChars > SPLIT_LIMIT_CHARS
                 Text(
-                    "다듬을 수 있는 ${doc.editableCount}줄 중 ${pv.changedCount}줄이 바뀌어요" +
-                        (if (pv.excludedCount > 0) " (제외 ${pv.excludedCount}줄)" else ""),
-                    style = MaterialTheme.typography.bodyMedium
+                    "결과 전체 ${"%,d".format(pv.totalChars)}자 (대사만 ${"%,d".format(pv.dialogueChars)}자) · " +
+                        if (over) "5천자 초과, 분할 필요" else "5천자 이하, 분할 불필요",
+                    fontSize = 13.sp,
+                    color = if (over) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
                 )
                 for (p in pv.problems) {
                     Text(p, color = MaterialTheme.colorScheme.error, fontSize = 13.sp)
@@ -255,8 +272,10 @@ private fun CleanScreen(vm: AppViewModel) {
                         label = { Text("바뀐 줄만 보기") }
                     )
                     Spacer(Modifier.weight(1f))
-                    if (pv.excludedCount > 0) {
-                        TextButton(onClick = { vm.clearExcluded() }) { Text("제외 취소") }
+                    TextButton(onClick = { vm.copyResult() }) {
+                        Icon(Icons.Default.ContentCopy, contentDescription = null)
+                        Spacer(Modifier.width(4.dp))
+                        Text("복사")
                     }
                     TextButton(onClick = { vm.showResult() }) { Text("결과 전체 보기") }
                 }

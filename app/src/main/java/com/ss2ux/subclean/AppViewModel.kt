@@ -27,7 +27,9 @@ class Preview(
     val rows: List<PreviewRow>,    // 편집 대상 줄만
     val changedCount: Int,
     val excludedCount: Int,        // 사용자가 눌러서 "바꾸지 않기"로 뺀 줄 수
-    val problems: List<String>
+    val problems: List<String>,
+    val totalChars: Int = 0,       // 저장·복사되는 결과 전체 글자 수 (타임스탬프·줄바꿈 포함, 제외한 줄 반영)
+    val dialogueChars: Int = 0     // 대사 본문만 이어 붙인 글자 수 (줄 사이 줄바꿈 포함, 제외한 줄 반영)
 )
 
 /** 앱에 들어 있는 말투 팩의 버전. speech_pack.tsv 를 고쳐서 새로 넣어야 할 때 숫자를 올린다 */
@@ -125,6 +127,19 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         viewModelScope.launch(Dispatchers.Default) {
             val text = dc.render(p.newBodies)
             withContext(Dispatchers.Main) { resultText = text }
+        }
+    }
+
+    /** 지금 미리보기 결과(제외한 줄 반영) 전체를 클립보드에 넣도록 UI 에 넘긴다. 저장 없이도 쓸 수 있다 */
+    fun copyResult() {
+        val dc = doc ?: return
+        val p = preview ?: return
+        viewModelScope.launch(Dispatchers.Default) {
+            val text = dc.render(p.newBodies)
+            withContext(Dispatchers.Main) {
+                pendingClipboard = text
+                message = "결과를 복사했어요 (${text.length}자)"
+            }
         }
     }
 
@@ -252,18 +267,31 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
             val rows = ArrayList<PreviewRow>()
             var changed = 0
             var excludedCount = 0
+            var total = 0
+            var dialogue = 0
+            var dialogueLines = 0
             for ((i, ln) in d.lines.withIndex()) {
                 if (!ln.editable) {
                     bodies.add(ln.body)
+                    total += ln.prefix.length + ln.body.length + ln.eol.length
                 } else {
                     val after = (if (monologue.containsMatchIn(ln.body)) commonCleaner else cleaner).clean(ln.body)
                     val skip = i in ex && after != ln.body
-                    bodies.add(if (skip) ln.body else after)   // 제외한 줄은 원래 그대로 둔다
+                    val finalBody = if (skip) ln.body else after
+                    bodies.add(finalBody)   // 제외한 줄은 원래 그대로 둔다
+                    total += ln.prefix.length + finalBody.length + ln.eol.length
+                    dialogue += finalBody.length
+                    dialogueLines++
                     rows.add(PreviewRow(i, ln.body, after, skip))
                     if (skip) excludedCount++ else if (after != ln.body) changed++
                 }
             }
-            val p = Preview(bodies, rows, changed, excludedCount, (cleaner.problems + commonCleaner.problems).distinct())
+            val p = Preview(
+                bodies, rows, changed, excludedCount,
+                (cleaner.problems + commonCleaner.problems).distinct(),
+                totalChars = total,
+                dialogueChars = dialogue + (dialogueLines - 1).coerceAtLeast(0)
+            )
             withContext(Dispatchers.Main) { preview = p }
         }
     }
