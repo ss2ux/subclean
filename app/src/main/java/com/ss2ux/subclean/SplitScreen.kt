@@ -77,7 +77,7 @@ fun SplitScreen(vm: AppViewModel) {
         Spacer(Modifier.height(12.dp))
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedButton(
-                onClick = { openLauncher.launch(SUBTITLE_MIME_TYPES) },
+                onClick = { openLauncher.launch(arrayOf("*/*")) },
                 modifier = Modifier.weight(1f)
             ) {
                 Icon(Icons.Default.FolderOpen, contentDescription = null)

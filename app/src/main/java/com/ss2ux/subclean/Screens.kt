@@ -182,7 +182,7 @@ private fun CleanScreen(vm: AppViewModel) {
         Spacer(Modifier.height(12.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
             Button(
-                onClick = { openLauncher.launch(SUBTITLE_MIME_TYPES) },
+                onClick = { openLauncher.launch(arrayOf("*/*")) },
                 enabled = !vm.busy
             ) {
                 Icon(Icons.Default.FolderOpen, contentDescription = null)
