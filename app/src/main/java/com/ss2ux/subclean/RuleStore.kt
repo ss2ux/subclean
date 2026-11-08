@@ -171,6 +171,16 @@ class SettingsStore(context: Context) {
         get() = p.getInt("splitLimit", Splitter.DEFAULT_LIMIT).coerceIn(1000, Splitter.MAX_LIMIT)
         set(v) { p.edit().putInt("splitLimit", v.coerceIn(1000, Splitter.MAX_LIMIT)).apply() }
 
+    /** 마지막으로 연 자막 파일 URI (파일 선택기 시작 위치용). 없으면 null */
+    var lastOpenUri: String?
+        get() = p.getString("lastOpenUri", null)
+        set(v) { p.edit().putString("lastOpenUri", v).apply() }
+
+    /** 마지막으로 연 파일 표시 이름 */
+    var lastOpenName: String?
+        get() = p.getString("lastOpenName", null)
+        set(v) { p.edit().putString("lastOpenName", v).apply() }
+
     fun save(o: CleanOptions) {
         p.edit()
             .putInt("threshold", o.threshold)

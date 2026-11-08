@@ -51,6 +51,11 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         private set
     var fileUri by mutableStateOf<Uri?>(null)
         private set
+    /** 마지막으로 연 파일 (앱 재시작 후에도 유지). 파일 선택기 시작 위치·안내용 */
+    var lastOpenUri by mutableStateOf(settingsStore.lastOpenUri?.let { runCatching { Uri.parse(it) }.getOrNull() })
+        private set
+    var lastOpenName by mutableStateOf(settingsStore.lastOpenName)
+        private set
     var forcedCharset by mutableStateOf<Charset?>(null)   // null = 자동 감지
         private set
     var decoded by mutableStateOf<Decoded?>(null)
@@ -158,6 +163,11 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
                         fileUri = uri
                         fileName = name
                         forcedCharset = null
+                        // 다음에 파일 선택기를 열 때 이 위치부터 보이도록 기억
+                        lastOpenUri = uri
+                        lastOpenName = name
+                        settingsStore.lastOpenUri = uri.toString()
+                        settingsStore.lastOpenName = name
                         reparse()
                     }
                 }

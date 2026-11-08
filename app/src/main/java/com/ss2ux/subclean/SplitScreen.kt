@@ -54,7 +54,9 @@ private fun Int.fmt(): String = "%,d".format(this)
 @Composable
 fun SplitScreen(vm: AppViewModel) {
     val clipboard = LocalClipboardManager.current
-    val openLauncher = rememberLauncherForActivityResult(OpenDocumentRw()) { uri ->
+    val openLauncher = rememberLauncherForActivityResult(
+        OpenDocumentRw { vm.lastOpenUri }
+    ) { uri ->
         if (uri != null) vm.loadSplitFile(uri)
     }
     val chunks = vm.splitChunks
@@ -74,7 +76,10 @@ fun SplitScreen(vm: AppViewModel) {
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
         Spacer(Modifier.height(12.dp))
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(onClick = { openLauncher.launch(arrayOf("*/*")) }, modifier = Modifier.weight(1f)) {
+            OutlinedButton(
+                onClick = { openLauncher.launch(SUBTITLE_MIME_TYPES) },
+                modifier = Modifier.weight(1f)
+            ) {
                 Icon(Icons.Default.FolderOpen, contentDescription = null)
                 Spacer(Modifier.width(6.dp))
                 Text("파일 열기", maxLines = 1)

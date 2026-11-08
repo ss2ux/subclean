@@ -15,19 +15,37 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 
-/** 파일 선택기: 읽기뿐 아니라 쓰기 권한(덮어쓰기용)도 요청하는 OpenDocument */
-class OpenDocumentRw : ActivityResultContracts.OpenDocument() {
-    override fun createIntent(context: Context, input: Array<String>): Intent =
-        super.createIntent(context, input).addFlags(
+/**
+ * 파일 선택기: 읽기+쓰기 권한(덮어쓰기용)을 요청하는 OpenDocument.
+ * [initialUriProvider] 가 null 이 아니면 그 위치를 먼저 열고, 없으면 Download 폴더부터 연다.
+ * MIME 필터는 호출 쪽 launch(...) 인자로 넘긴다. 확장자 필터는 Android SAF 정책상 공식 지원되지 않는다.
+ */
+class OpenDocumentRw(
+    private val initialUriProvider: () -> Uri? = { null }
+) : ActivityResultContracts.OpenDocument() {
+    override fun createIntent(context: Context, input: Array<String>): Intent {
+        val intent = super.createIntent(context, input).addFlags(
             Intent.FLAG_GRANT_READ_URI_PERMISSION or
                 Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
                 Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
-        ).putExtra(
-            // 파일 선택기를 열면 다운로드 폴더부터 보여 준다
-            DocumentsContract.EXTRA_INITIAL_URI,
-            Uri.parse("content://com.android.externalstorage.documents/document/primary%3ADownload")
         )
+        val initial = initialUriProvider()
+            ?: Uri.parse("content://com.android.externalstorage.documents/document/primary%3ADownload")
+        intent.putExtra(DocumentsContract.EXTRA_INITIAL_URI, initial)
+        return intent
+    }
 }
+
+/** 자막 파일에 가깝게 맞춘 MIME 목록. 기기/제공자에 따라 .srt 가 octet-stream 인 경우도 있어 text/* 를 포함한다.
+ *  mp3 등 오디오는 보통 제외된다. 완전 차단은 Android 정책상 보장되지 않는다. */
+val SUBTITLE_MIME_TYPES = arrayOf(
+    "text/*",
+    "application/x-subrip",
+    "application/ttml+xml",
+    "application/xml",
+    "text/vtt",
+    "text/plain"
+)
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {

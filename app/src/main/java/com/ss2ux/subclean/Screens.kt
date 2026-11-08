@@ -156,7 +156,10 @@ fun AppScreen(vm: AppViewModel = viewModel()) {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun CleanScreen(vm: AppViewModel) {
-    val openLauncher = rememberLauncherForActivityResult(OpenDocumentRw()) { uri ->
+    // 최근 연 파일 위치를 파일 선택기 시작점으로 사용
+    val openLauncher = rememberLauncherForActivityResult(
+        OpenDocumentRw { vm.lastOpenUri }
+    ) { uri ->
         if (uri != null) vm.openFile(uri)
     }
     val saveAsLauncher = rememberLauncherForActivityResult(
@@ -178,18 +181,41 @@ private fun CleanScreen(vm: AppViewModel) {
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
         Spacer(Modifier.height(12.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Button(onClick = { openLauncher.launch(arrayOf("*/*")) }, enabled = !vm.busy) {
+            Button(
+                onClick = { openLauncher.launch(SUBTITLE_MIME_TYPES) },
+                enabled = !vm.busy
+            ) {
                 Icon(Icons.Default.FolderOpen, contentDescription = null)
                 Spacer(Modifier.width(8.dp))
                 Text("파일 열기")
             }
             Spacer(Modifier.width(12.dp))
-            Text(
-                vm.fileName ?: "자막 파일(.srt .vtt .lrc .txt)을 열어 주세요",
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f)
-            )
+            Column(Modifier.weight(1f)) {
+                Text(
+                    vm.fileName ?: "자막 파일(.srt .vtt .lrc .txt)을 열어 주세요",
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                // 최근 연 파일 위치 안내 (지금 연 파일과 다를 때만)
+                val last = vm.lastOpenName
+                if (last != null && last != vm.fileName) {
+                    Text(
+                        "최근: $last",
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                } else if (last != null && vm.fileName == null) {
+                    Text(
+                        "최근: $last 위치에서 열어요",
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
         }
 
         SpeechRow(vm)
