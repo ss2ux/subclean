@@ -36,9 +36,10 @@ class OpenDocumentRw(
     }
 }
 
-/** 자막 파일에 가깝게 맞춘 MIME 목록. 기기/제공자에 따라 .srt 가 octet-stream 인 경우도 있어 text/* 를 포함한다.
- *  mp3 등 오디오는 보통 제외된다. 완전 차단은 Android 정책상 보장되지 않는다. */
-val SUBTITLE_MIME_TYPES = arrayOf(
+// 자막에 가깝게 맞춘 MIME 목록.
+// .srt 가 octet-stream 으로 잡히는 기기도 있어 text 와일드카드를 포함한다.
+// mp3 등 오디오는 보통 제외되나, 완전 차단은 Android 정책상 보장되지 않는다.
+val SUBTITLE_MIME_TYPES: Array<String> = arrayOf(
     "text/*",
     "application/x-subrip",
     "application/ttml+xml",
