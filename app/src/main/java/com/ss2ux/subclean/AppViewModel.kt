@@ -471,14 +471,14 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun exportRules(uri: Uri) {
-        val snapshot = rules
+    fun exportRules(uri: Uri, regexOnly: Boolean = false) {
+        val snapshot = if (regexOnly) rules.filter { it.regex } else rules
         viewModelScope.launch(Dispatchers.IO) {
             val msg = try {
                 app.contentResolver.openOutputStream(uri, "wt")?.use {
                     it.write(RuleStore.toTsv(snapshot).toByteArray(Charsets.UTF_8))
                 } ?: throw IllegalStateException("파일에 쓸 수 없어요")
-                "규칙 ${snapshot.size}개를 내보냈어요"
+                if (regexOnly) "정규식 규칙 ${snapshot.size}개를 내보냈어요" else "규칙 ${snapshot.size}개를 내보냈어요"
             } catch (e: Exception) {
                 "내보내기 실패: ${e.message ?: e}"
             }

@@ -214,7 +214,6 @@ private fun CleanScreen(vm: AppViewModel) {
                 val shown = remember(pv, onlyChanged) {
                     if (onlyChanged) pv.rows.filter { it.changed } else pv.rows
                 }
-                // 당겨서 새로고침이 먹으려면 영역이 스크롤 가능해야 해서, 빈 상태도 LazyColumn 안에 넣는다
                 val listState = rememberLazyListState()
                 Box(Modifier.weight(1f).fillMaxWidth().nestedScroll(pullState.nestedScrollConnection)) {
                     Row(Modifier.fillMaxSize()) {
@@ -284,11 +283,6 @@ private fun CleanScreen(vm: AppViewModel) {
     }
 }
 
-/**
- * 목록 오른쪽의 끌 수 있는 스크롤바. 항목이 20개 이상일 때만 나온다.
- * 손잡이를 끌면 그 위치로 바로 이동하고, 끄는 동안 현재 번호(몇 번째 / 전체)를 말풍선으로 보여 준다.
- * 목록과 겹치지 않게 Row 에서 목록 옆에 나란히 둔다.
- */
 @Composable
 private fun ListScrollbar(state: LazyListState) {
     val total = state.layoutInfo.totalItemsCount
@@ -309,7 +303,6 @@ private fun ListScrollbar(state: LazyListState) {
         val y = (frac.coerceIn(0f, 1f) * span).roundToInt()
         val jumpIndex = (dragFrac.coerceIn(0f, 1f) * (total - 1)).roundToInt()
 
-        // 끌기를 받는 영역 (24dp 폭의 세로 띠)
         Box(
             Modifier.fillMaxSize().pointerInput(total, heightPx) {
                 detectVerticalDragGestures(
@@ -328,7 +321,6 @@ private fun ListScrollbar(state: LazyListState) {
                 )
             }
         )
-        // 손잡이
         Box(
             Modifier
                 .align(Alignment.TopEnd)
@@ -357,7 +349,6 @@ private fun ListScrollbar(state: LazyListState) {
     }
 }
 
-/** 말투 선택: 파일마다 바로 바꿔 보면서 미리보기를 확인한다. 마지막 선택은 기억한다 */
 @Composable
 private fun SpeechRow(vm: AppViewModel) {
     val cur = vm.settings.speech
@@ -391,7 +382,6 @@ private fun SpeechRow(vm: AppViewModel) {
     }
 }
 
-/** 바뀐 전체 텍스트: 길게 눌러 일부를 선택·복사할 수 있고, 위의 버튼으로 전체를 한 번에 복사한다 */
 @Composable
 private fun ResultDialog(text: String, onClose: () -> Unit) {
     val clip = LocalClipboardManager.current
@@ -481,7 +471,6 @@ private fun EncodingRow(vm: AppViewModel, doc: Doc, dec: Decoded) {
 
 @Composable
 private fun RowCard(row: PreviewRow, onToggle: () -> Unit) {
-    // 바뀌는 줄(누르면 제외)과 제외한 줄(누르면 다시 포함)만 누를 수 있다
     val tappable = row.changed || row.excluded
     Card(
         Modifier.fillMaxWidth().padding(vertical = 4.dp).let { if (tappable) it.clickable(onClick = onToggle) else it }
@@ -524,7 +513,10 @@ private fun RulesScreen(vm: AppViewModel) {
     var adding by remember { mutableStateOf(false) }
     var deleting by remember { mutableStateOf<Rule?>(null) }
     var confirmPack by remember { mutableStateOf(false) }
-    var filterIdx by rememberSaveable { mutableIntStateOf(0) }   // 0 전체, 1 공통, 2 높임, 3 반말 (보기 전용)
+    var filterIdx by rememberSaveable { mutableIntStateOf(0) }   // 0 전체, 1 공통, 2 높임, 3 반말, 4 정규식만
+
+    var exportMenuExpanded by remember { mutableStateOf(false) }
+    var exportRegexOnly by remember { mutableStateOf(false) }
 
     val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) vm.importRules(uri)
@@ -532,7 +524,7 @@ private fun RulesScreen(vm: AppViewModel) {
     val exportLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("application/octet-stream")
     ) { uri ->
-        if (uri != null) vm.exportRules(uri)
+        if (uri != null) vm.exportRules(uri, regexOnly = exportRegexOnly)
     }
 
     val q = query.trim()
@@ -540,21 +532,22 @@ private fun RulesScreen(vm: AppViewModel) {
     val sortNames = listOf("최신순(등록 내림차순)", "오래된순(등록 오름차순)", "가나다순")
     val listState = rememberLazyListState()
     var prevSize by remember { mutableIntStateOf(vm.rules.size) }
-    // 규칙이 새로 생기면(추가·가져오기·팩) 최신순에서는 맨 위로 올려서 바로 보이게 한다
+    
     LaunchedEffect(vm.rules.size) {
         if (vm.rules.size > prevSize && sort == 0) listState.scrollToItem(0)
         prevSize = vm.rules.size
     }
     val shown = remember(vm.rules, q, filterIdx, sort) {
-        val bySpeech = when (filterIdx) {
+        val byFilter = when (filterIdx) {
             1 -> vm.rules.filter { it.speech == Speech.ALL }
             2 -> vm.rules.filter { it.speech == Speech.HONORIFIC }
             3 -> vm.rules.filter { it.speech == Speech.CASUAL }
+            4 -> vm.rules.filter { it.regex } // 정규식만 보기
             else -> vm.rules
         }
-        val found = if (q.isEmpty()) bySpeech
-        else bySpeech.filter { it.find.contains(q, ignoreCase = true) || it.replace.contains(q, ignoreCase = true) }
-        // 정렬은 보기 전용: vm.rules(저장 순서 = 정규식 적용 순서)는 건드리지 않고 복사본만 정렬한다
+        val found = if (q.isEmpty()) byFilter
+        else byFilter.filter { it.find.contains(q, ignoreCase = true) || it.replace.contains(q, ignoreCase = true) }
+        
         when (sort) {
             0 -> found.sortedByDescending { it.id }
             2 -> found.sortedBy { it.find.lowercase() }
@@ -579,11 +572,36 @@ private fun RulesScreen(vm: AppViewModel) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Button(onClick = { adding = true }) { Text("규칙 추가") }
             TextButton(onClick = { importLauncher.launch(arrayOf("*/*")) }) { Text("가져오기") }
-            TextButton(onClick = { exportLauncher.launch("치환규칙.tsv") }) { Text("내보내기") }
+            
+            Box {
+                TextButton(onClick = { exportMenuExpanded = true }) { Text("내보내기") }
+                DropdownMenu(
+                    expanded = exportMenuExpanded,
+                    onDismissRequest = { exportMenuExpanded = false }
+                ) {
+                    DropdownMenuItem(
+                        text = { Text("전체 내보내기") },
+                        onClick = {
+                            exportMenuExpanded = false
+                            exportRegexOnly = false
+                            exportLauncher.launch("치환규칙.tsv")
+                        }
+                    )
+                    DropdownMenuItem(
+                        text = { Text("정규식만 내보내기") },
+                        onClick = {
+                            exportMenuExpanded = false
+                            exportRegexOnly = true
+                            exportLauncher.launch("정규식규칙.tsv")
+                        }
+                    )
+                }
+            }
+            
             TextButton(onClick = { confirmPack = true }) { Text("말투 팩 다시 넣기") }
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            val names = listOf("전체", "공통", "높임", "반말")
+            val names = listOf("전체", "공통", "높임", "반말", "정규식만")
             for ((i, nm) in names.withIndex()) {
                 FilterChip(selected = filterIdx == i, onClick = { filterIdx = i }, label = { Text(nm) })
             }
@@ -732,7 +750,7 @@ private fun RuleDialog(
                 }
                 if (regex) {
                     Text(
-                        "바꿀 말에서 \$1 처럼 괄호 묶음을 다시 쓸 수 있어요. " +
+                        "바꿀 말에서 $1 처럼 괄호 묶음을 다시 쓸 수 있어요. " +
                             "찾을 말에는 {받침} {무받침} {ㄹ받침} {ㄴ받침} {ㅆ받침} {양성받침} 으로 받침 있는/없는 글자를 가리킬 수 있어요. 예: (?<={받침})이야",
                         fontSize = 12.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
