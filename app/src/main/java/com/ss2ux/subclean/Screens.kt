@@ -89,12 +89,25 @@ import kotlin.math.roundToInt
 fun AppScreen(vm: AppViewModel = viewModel()) {
     var tab by rememberSaveable { mutableIntStateOf(0) }
     val snack = remember { SnackbarHostState() }
+    val clipboard = LocalClipboardManager.current
 
     LaunchedEffect(vm.message) {
         val m = vm.message
         if (m != null) {
             snack.showSnackbar(m)
             vm.clearMessage()
+        }
+    }
+    // 저장·복사 요청이 오면 클립보드에 넣고 비운다
+    LaunchedEffect(vm.pendingClipboard) {
+        val t = vm.pendingClipboard
+        if (t != null) {
+            try {
+                clipboard.setText(AnnotatedString(t))
+            } catch (_: Exception) {
+                // 너무 크면 실패할 수 있음 — 메시지로 이미 안내됨
+            }
+            vm.clearClipboard()
         }
     }
 
@@ -208,6 +221,11 @@ private fun CleanScreen(vm: AppViewModel) {
                     if (pv.excludedCount > 0) {
                         TextButton(onClick = { vm.clearExcluded() }) { Text("제외 취소") }
                     }
+                    TextButton(onClick = { vm.copyResult() }) {
+                        Icon(Icons.Default.ContentCopy, contentDescription = null)
+                        Spacer(Modifier.width(4.dp))
+                        Text("복사")
+                    }
                     TextButton(onClick = { vm.showResult() }) { Text("결과 전체 보기") }
                 }
 
@@ -265,8 +283,10 @@ private fun CleanScreen(vm: AppViewModel) {
         }
     }
 
+    // 결과 전체 보기 (수동). 저장 후에는 자동으로 띄우지 않고 클립보드에만 넣는다.
     vm.resultText?.let { text -> ResultDialog(text) { vm.closeResult() } }
 
+    // 덮어쓰기 확인 — 저장 직후 결과 창이 더 이상 안 뜨므로 가려지지 않음
     if (confirmOverwrite) {
         AlertDialog(
             onDismissRequest = { confirmOverwrite = false },
@@ -279,6 +299,30 @@ private fun CleanScreen(vm: AppViewModel) {
                 }) { Text("덮어쓰기") }
             },
             dismissButton = { TextButton(onClick = { confirmOverwrite = false }) { Text("취소") } }
+        )
+    }
+
+    // A→B→C 처럼 한 번에 안 끝나는 경우: 저장 후에도 바뀌는 줄이 있으면 연속 적용 제안
+    if (vm.offerAnotherPass) {
+        val n = vm.preview?.changedCount ?: 0
+        AlertDialog(
+            onDismissRequest = { vm.dismissAnotherPass() },
+            title = { Text("추가로 적용할 규칙이 있어요") },
+            text = {
+                Text(
+                    if (n > 0) "아직 ${n}줄이 더 바뀌어요. 바로 다시 적용할까요?"
+                    else "남아 있는 규칙을 바로 다시 적용할까요?"
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    vm.dismissAnotherPass()
+                    vm.save(null, true)   // 확인 없이 바로 한 번 더 덮어쓰기
+                }) { Text("적용") }
+            },
+            dismissButton = {
+                TextButton(onClick = { vm.dismissAnotherPass() }) { Text("나중에") }
+            }
         )
     }
 }

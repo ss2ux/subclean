@@ -60,8 +60,16 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
     var preview by mutableStateOf<Preview?>(null)
         private set
 
-    // 저장 후(또는 '결과 전체 보기')에 보여 주는 바뀐 전체 텍스트. null 이면 창이 닫혀 있음
+    // '결과 전체 보기' 창에 넣을 텍스트. null 이면 창이 닫혀 있음
     var resultText by mutableStateOf<String?>(null)
+        private set
+
+    // UI 가 클립보드에 넣을 텍스트. 넣으면 Compose 쪽에서 복사 후 clearClipboard() 호출
+    var pendingClipboard by mutableStateOf<String?>(null)
+        private set
+
+    // 저장·재파싱 후에도 아직 바뀌는 줄이 있을 때 true → UI 가 '다시 적용' 확인창을 띄움
+    var offerAnotherPass by mutableStateOf(false)
         private set
 
     // 사용자가 "이 줄은 바꾸지 않기"로 뺀 줄 번호들 (파일을 새로 열거나 다시 읽으면 비워진다)
@@ -95,6 +103,10 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
 
     fun closeResult() { resultText = null }
 
+    fun clearClipboard() { pendingClipboard = null }
+
+    fun dismissAnotherPass() { offerAnotherPass = false }
+
     /** 지금 미리보기 기준으로 바뀐 전체 텍스트를 만들어 보여 준다 (저장 안 해도 됨) */
     fun showResult() {
         val dc = doc ?: return
@@ -102,6 +114,19 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         viewModelScope.launch(Dispatchers.Default) {
             val text = dc.render(p.newBodies)
             withContext(Dispatchers.Main) { resultText = text }
+        }
+    }
+
+    /** 미리보기 결과 전체를 클립보드에 넣도록 UI 에 넘긴다 */
+    fun copyResult() {
+        val dc = doc ?: return
+        val p = preview ?: return
+        viewModelScope.launch(Dispatchers.Default) {
+            val text = dc.render(p.newBodies)
+            withContext(Dispatchers.Main) {
+                pendingClipboard = text
+                message = "결과를 복사했어요 (${text.length}자)"
+            }
         }
     }
 
@@ -242,7 +267,8 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
 
     // ---------------- 저장 ----------------
 
-    /** overwrite = true 면 열었던 원본 파일에 덮어쓰고, false 면 target 에 새로 저장 */
+    /** overwrite = true 면 열었던 원본 파일에 덮어쓰고, false 면 target 에 새로 저장.
+     *  성공 시 결과를 클립보드에 넣고, 덮어쓰기 후 아직 적용할 규칙이 있으면 offerAnotherPass 를 켠다. */
     fun save(target: Uri?, overwrite: Boolean) {
         val d = decoded ?: return
         val dc = doc ?: return
@@ -250,17 +276,19 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         val uri = if (overwrite) fileUri else target
         if (uri == null) return
         busy = true
+        offerAnotherPass = false
         viewModelScope.launch(Dispatchers.IO) {
             var msg = ""
             var newBytes: ByteArray? = null
             var savedText: String? = null
+            val changed = p.changedCount
             try {
                 val text = dc.render(p.newBodies)
                 val (out, note) = Encodings.encode(text, d)
                 val stream = app.contentResolver.openOutputStream(uri, "wt")
                     ?: throw IllegalStateException("파일에 쓸 수 없어요")
                 stream.use { it.write(out) }
-                msg = "저장했어요 (${p.changedCount}줄 바뀜)" + (if (note != null) " · $note" else "")
+                msg = "저장·복사했어요 (${changed}줄 바뀜)" + (if (note != null) " · $note" else "")
                 newBytes = out
                 savedText = text
             } catch (e: SecurityException) {
@@ -269,15 +297,17 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
                 msg = "저장 실패: ${e.message ?: e}"
             }
             withContext(Dispatchers.Main) {
+                if (savedText != null) pendingClipboard = savedText  // 자동 복사 (결과 창은 띄우지 않음)
                 message = msg
-                busy = false
-                if (savedText != null) resultText = savedText   // 저장 직후 바뀐 전체 텍스트 표시
-                // 원본에 덮어썼다면 새 내용을 기준으로 다시 읽는다
+                // 원본에 덮어썼다면 새 내용을 기준으로 다시 읽고, 남은 규칙이 있으면 연속 적용을 제안
                 if (overwrite && newBytes != null) {
                     bytes = newBytes
                     forcedCharset = null
                     reparse()
+                    job?.join()   // 미리보기 재계산이 끝날 때까지 대기
+                    if ((preview?.changedCount ?: 0) > 0) offerAnotherPass = true
                 }
+                busy = false
             }
         }
     }
