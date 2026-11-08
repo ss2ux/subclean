@@ -28,10 +28,9 @@ data class CleanOptions(
 /**
  * 오프라인 텍스트 다듬기 엔진. 순서:
  *  0) (옵션) NFC 정규화
- *  1) 일반 치환 규칙 전부를 한 번에: 긴 말부터 우선, 치환 결과가 다시 치환되는 연쇄는 없음
- *     (옵션) 바뀐 말 바로 뒤의 조사를 새 말의 받침에 맞게 보정 (일반 규칙만; 정규식 규칙은 대상 아님)
- *  2) 정규식 규칙을 목록 순서대로
- *  3) 반복 압축 (한 글자 -> 단어 -> 여러 글자 덩어리)
+ *  1) 일반 치환 + 정규식 치환을 결과가 안 바뀔 때까지 반복 (A→B→C 연쇄, 최대 MAX_PASSES)
+ *     일반 규칙은 긴 말 우선. (옵션) 바뀐 말 뒤 조사 보정은 일반 규칙만
+ *  2) 반복 압축 (한 글자 -> 단어 -> 여러 글자 덩어리) — 마지막에 한 번
  *
  * 숫자는 압축하지 않는다 (100000원 이 1000원 이 되면 안 되므로).
  */
@@ -117,6 +116,11 @@ class Cleaner(rules: List<Rule>, private val opt: CleanOptions) {
         return sb.toString()
     }
 
+    /**
+     * 치환을 결과가 더 이상 바뀌지 않을 때까지 반복한다 (A→B→C 연쇄).
+     * 서로 바꾸는 규칙이 있으면 무한 루프를 막기 위해 최대 [MAX_PASSES] 번만 돈다.
+     * 반복 압축은 마지막에 한 번만 적용한다.
+     */
     fun clean(text: String): String {
         var s = norm(text)
 
@@ -131,18 +135,23 @@ class Cleaner(rules: List<Rule>, private val opt: CleanOptions) {
             if (list.isNotEmpty()) saved = list
         }
 
-        plainRegex?.let { re -> s = replacePlain(s, re) }
-
-        for ((rule, re, repl) in regexRules) {
-            if (rule.id in brokenRules) continue
-            try {
-                s = re.replace(s, repl)
-            } catch (e: Exception) {
-                // 바꿀 말의 $1 같은 그룹 참조가 잘못된 경우
-                brokenRules.add(rule.id)
-                problems.add("바꿀 말 오류: ${rule.find} -> ${rule.replace}")
+        var passes = 0
+        do {
+            val prev = s
+            plainRegex?.let { re -> s = replacePlain(s, re) }
+            for ((rule, re, repl) in regexRules) {
+                if (rule.id in brokenRules) continue
+                try {
+                    s = re.replace(s, repl)
+                } catch (e: Exception) {
+                    // 바꿀 말의 $1 같은 그룹 참조가 잘못된 경우
+                    brokenRules.add(rule.id)
+                    problems.add("바꿀 말 오류: ${rule.find} -> ${rule.replace}")
+                }
             }
-        }
+            passes++
+            if (s == prev) break
+        } while (passes < MAX_PASSES)
 
         if (opt.compressChars) s = charRe.replace(s) { m -> m.groupValues[1].repeat(keep) }
         if (opt.compressWords) s = wordRe.replace(s) { m -> List(keep) { m.groupValues[1] }.joinToString(" ") }
@@ -157,5 +166,10 @@ class Cleaner(rules: List<Rule>, private val opt: CleanOptions) {
             s = sb.toString()
         }
         return s
+    }
+
+    companion object {
+        /** A→B→C 연쇄용. 10이면 일반적인 말투 변환에 충분하고, 왕복 규칙 무한 루프도 막는다 */
+        const val MAX_PASSES = 10
     }
 }

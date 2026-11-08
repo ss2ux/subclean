@@ -328,29 +328,7 @@ private fun CleanScreen(vm: AppViewModel) {
         )
     }
 
-    // A→B→C 처럼 한 번에 안 끝나는 경우: 저장 후에도 바뀌는 줄이 있으면 연속 적용 제안
-    if (vm.offerAnotherPass) {
-        val n = vm.preview?.changedCount ?: 0
-        AlertDialog(
-            onDismissRequest = { vm.dismissAnotherPass() },
-            title = { Text("추가로 적용할 규칙이 있어요") },
-            text = {
-                Text(
-                    if (n > 0) "아직 ${n}줄이 더 바뀌어요. 바로 다시 적용할까요?"
-                    else "남아 있는 규칙을 바로 다시 적용할까요?"
-                )
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    vm.dismissAnotherPass()
-                    vm.save(null, true)   // 확인 없이 바로 한 번 더 덮어쓰기
-                }) { Text("적용") }
-            },
-            dismissButton = {
-                TextButton(onClick = { vm.dismissAnotherPass() }) { Text("나중에") }
-            }
-        )
-    }
+    // 연쇄 치환(A→B→C)은 Cleaner 가 최대 10패스까지 자동 처리한다.
 }
 
 @Composable

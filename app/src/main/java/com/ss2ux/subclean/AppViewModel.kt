@@ -278,7 +278,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
     // ---------------- 저장 ----------------
 
     /** overwrite = true 면 열었던 원본 파일에 덮어쓰고, false 면 target 에 새로 저장.
-     *  성공 시 결과를 클립보드에 넣고, 덮어쓰기 후 아직 적용할 규칙이 있으면 offerAnotherPass 를 켠다. */
+     *  성공 시 결과를 클립보드에 넣는다. 치환 연쇄(A→B→C)는 Cleaner 가 한 번에 처리한다. */
     fun save(target: Uri?, overwrite: Boolean) {
         val d = decoded ?: return
         val dc = doc ?: return
@@ -307,15 +307,12 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
                 msg = "저장 실패: ${e.message ?: e}"
             }
             withContext(Dispatchers.Main) {
-                if (savedText != null) pendingClipboard = savedText  // 자동 복사 (결과 창은 띄우지 않음)
+                if (savedText != null) pendingClipboard = savedText
                 message = msg
-                // 원본에 덮어썼다면 새 내용을 기준으로 다시 읽고, 남은 규칙이 있으면 연속 적용을 제안
                 if (overwrite && newBytes != null) {
                     bytes = newBytes
                     forcedCharset = null
                     reparse()
-                    job?.join()   // 미리보기 재계산이 끝날 때까지 대기
-                    if ((preview?.changedCount ?: 0) > 0) offerAnotherPass = true
                 }
                 busy = false
             }
