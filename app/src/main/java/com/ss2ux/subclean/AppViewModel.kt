@@ -37,7 +37,9 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
     private val ruleStore = RuleStore(app)
     private val settingsStore = SettingsStore(app)
 
-    var rules by mutableStateOf(ruleStore.load())
+    private val loadedRules = ruleStore.load()
+    private val dedupedRules = RuleStore.dedupe(loadedRules)
+    var rules by mutableStateOf(dedupedRules)
         private set
     var settings by mutableStateOf(settingsStore.load())
         private set
@@ -100,6 +102,10 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
     private var job: Job? = null
 
     init {
+        // 이미 저장돼 있던 완전히 같은 규칙은 하나만 남기고 파일에도 반영한다
+        if (dedupedRules.size != loadedRules.size) {
+            viewModelScope.launch(Dispatchers.IO) { ruleStore.save(dedupedRules) }
+        }
         // 처음 실행하거나, 앱 업데이트로 말투 팩이 새로워졌을 때 기본 말투 규칙을 자동으로 넣는다
         if (settingsStore.speechPackVersion < SPEECH_PACK_VERSION) autoInstallSpeechPack()
     }
@@ -119,19 +125,6 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         viewModelScope.launch(Dispatchers.Default) {
             val text = dc.render(p.newBodies)
             withContext(Dispatchers.Main) { resultText = text }
-        }
-    }
-
-    /** 미리보기 결과 전체를 클립보드에 넣도록 UI 에 넘긴다 */
-    fun copyResult() {
-        val dc = doc ?: return
-        val p = preview ?: return
-        viewModelScope.launch(Dispatchers.Default) {
-            val text = dc.render(p.newBodies)
-            withContext(Dispatchers.Main) {
-                pendingClipboard = text
-                message = "결과를 복사했어요 (${text.length}자)"
-            }
         }
     }
 
@@ -407,6 +400,11 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
     private fun nextId(): Long = (rules.maxOfOrNull { it.id } ?: 0L) + 1
 
     fun addRule(find: String, replace: String, regex: Boolean, speech: Speech = Speech.ALL) {
+        // 찾을 말·바꿀 말·정규식 여부·말투가 전부 같은 규칙은 다시 등록하지 않는다
+        if (rules.any { RuleStore.sameRule(it, find, replace, regex, speech) }) {
+            message = "똑같은 규칙이 이미 있어요"
+            return
+        }
         commitRules(rules + Rule(nextId(), find, replace, regex, true, speech))
     }
 
@@ -452,25 +450,16 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** 규칙 탭의 '말투 팩 다시 넣기' 버튼: 지웠거나 빠진 기본 규칙을 다시 채운다 */
-    fun installSpeechPack() {
-        viewModelScope.launch(Dispatchers.Main) {
-            message = try {
-                val added = mergeSpeechPack()
-                settingsStore.speechPackVersion = SPEECH_PACK_VERSION
-                if (added > 0) "기본 말투 규칙 ${added}개를 추가했어요" else "기본 말투 규칙이 이미 모두 들어 있어요"
-            } catch (e: Exception) {
-                "기본 규칙을 불러오지 못했어요: ${e.message ?: e}"
-            }
-        }
-    }
-
     fun changeRuleSort(v: Int) {
         ruleSort = v
         settingsStore.ruleSort = v
     }
 
     fun updateRule(r: Rule) {
+        if (rules.any { it.id != r.id && RuleStore.sameRule(it, r.find, r.replace, r.regex, r.speech) }) {
+            message = "똑같은 규칙이 이미 있어요"
+            return
+        }
         commitRules(rules.map { if (it.id == r.id) r else it })
     }
 
@@ -500,7 +489,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
                             updated++
                         }
                     }
-                    commitRules(list)
+                    commitRules(RuleStore.dedupe(list))
                     message = "규칙 가져오기: ${added}개 추가, ${updated}개 갱신"
                 }
             } catch (e: Exception) {

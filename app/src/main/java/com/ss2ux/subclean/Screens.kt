@@ -5,6 +5,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.offset
@@ -229,13 +230,23 @@ private fun CleanScreen(vm: AppViewModel) {
                         (if (pv.excludedCount > 0) " (제외 ${pv.excludedCount}줄)" else ""),
                     style = MaterialTheme.typography.bodyMedium
                 )
-                Text(
-                    "바꾸기 싫은 줄은 눌러서 목록에서 빼세요. 아래로 당기면 파일을 다시 읽어요.",
-                    fontSize = 12.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
                 for (p in pv.problems) {
                     Text(p, color = MaterialTheme.colorScheme.error, fontSize = 13.sp)
+                }
+                Row(
+                    Modifier.fillMaxWidth().padding(top = 4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = { saveAsLauncher.launch(suggestName(vm.fileName)) },
+                        enabled = !vm.busy,
+                        modifier = Modifier.weight(1f)
+                    ) { Text("다른 이름으로 저장") }
+                    Button(
+                        onClick = { confirmOverwrite = true },
+                        enabled = !vm.busy && pv.changedCount > 0,
+                        modifier = Modifier.weight(1f)
+                    ) { Text("원본에 덮어쓰기") }
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     FilterChip(
@@ -246,11 +257,6 @@ private fun CleanScreen(vm: AppViewModel) {
                     Spacer(Modifier.weight(1f))
                     if (pv.excludedCount > 0) {
                         TextButton(onClick = { vm.clearExcluded() }) { Text("제외 취소") }
-                    }
-                    TextButton(onClick = { vm.copyResult() }) {
-                        Icon(Icons.Default.ContentCopy, contentDescription = null)
-                        Spacer(Modifier.width(4.dp))
-                        Text("복사")
                     }
                     TextButton(onClick = { vm.showResult() }) { Text("결과 전체 보기") }
                 }
@@ -277,22 +283,6 @@ private fun CleanScreen(vm: AppViewModel) {
                         }
                         ListScrollbar(listState)
                     }
-                }
-
-                Row(
-                    Modifier.fillMaxWidth().padding(vertical = 8.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    OutlinedButton(
-                        onClick = { saveAsLauncher.launch(suggestName(vm.fileName)) },
-                        enabled = !vm.busy,
-                        modifier = Modifier.weight(1f)
-                    ) { Text("다른 이름으로 저장") }
-                    Button(
-                        onClick = { confirmOverwrite = true },
-                        enabled = !vm.busy && pv.changedCount > 0,
-                        modifier = Modifier.weight(1f)
-                    ) { Text("원본에 덮어쓰기") }
                 }
             } else {
                 Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
@@ -423,7 +413,7 @@ private fun SpeechRow(vm: AppViewModel) {
         )
         if (cur != Speech.ALL && vm.rules.none { it.speech == cur }) {
             Text(
-                "이 말투의 규칙이 하나도 없어요. 규칙 탭의 '말투 팩 다시 넣기'를 눌러 주세요.",
+                "이 말투의 규칙이 하나도 없어요.",
                 fontSize = 12.sp,
                 color = MaterialTheme.colorScheme.error
             )
@@ -561,7 +551,6 @@ private fun RulesScreen(vm: AppViewModel) {
     var editing by remember { mutableStateOf<Rule?>(null) }
     var adding by remember { mutableStateOf(false) }
     var deleting by remember { mutableStateOf<Rule?>(null) }
-    var confirmPack by remember { mutableStateOf(false) }
     // 0 전체, 1 공통, 2 높임1, 3 높임2, 4 반말, 5 정규식만
     var filterIdx by rememberSaveable { mutableIntStateOf(0) }
 
@@ -649,13 +638,18 @@ private fun RulesScreen(vm: AppViewModel) {
                     )
                 }
             }
-            
-            TextButton(onClick = { confirmPack = true }) { Text("말투 팩 다시 넣기") }
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(
+            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
             val names = listOf("전체", "공통", "높임1", "높임2", "반말", "정규식만")
             for ((i, nm) in names.withIndex()) {
-                FilterChip(selected = filterIdx == i, onClick = { filterIdx = i }, label = { Text(nm) })
+                FilterChip(
+                    selected = filterIdx == i,
+                    onClick = { filterIdx = i },
+                    label = { Text(nm, maxLines = 1, softWrap = false) }
+                )
             }
         }
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -738,23 +732,6 @@ private fun RulesScreen(vm: AppViewModel) {
             defaultSpeech = cur.speech,
             onDismiss = { editing = null },
             onSave = { f, r, rx, sp -> vm.updateRule(cur.copy(find = f, replace = r, regex = rx, speech = sp)); editing = null }
-        )
-    }
-    if (confirmPack) {
-        AlertDialog(
-            onDismissRequest = { confirmPack = false },
-            title = { Text("기본 말투 규칙을 다시 넣을까요?") },
-            text = {
-                Text(
-                    "기본 말투 규칙은 앱을 켤 때 자동으로 들어가 있어요. 지웠거나 빠진 규칙이 있을 때만 다시 넣어 주세요. 없는 규칙만 목록 끝에 추가해요. " +
-                        "이미 들어 있는 규칙은 건드리지 않고, 기존 규칙은 전부 그대로예요. " +
-                        "정규식 규칙은 위에서 아래 순서대로 적용되니 순서는 바꾸지 마세요."
-                )
-            },
-            confirmButton = {
-                TextButton(onClick = { confirmPack = false; vm.installSpeechPack() }) { Text("넣기") }
-            },
-            dismissButton = { TextButton(onClick = { confirmPack = false }) { Text("취소") } }
         )
     }
     deleting?.let { cur ->

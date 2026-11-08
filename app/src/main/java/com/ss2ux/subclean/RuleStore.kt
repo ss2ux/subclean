@@ -52,6 +52,28 @@ class RuleStore(context: Context) {
     }
 
     companion object {
+        /** 찾을 말·바꿀 말·정규식 여부·말투가 한 글자도 안 다르면 같은 규칙 (켜짐/꺼짐은 비교하지 않는다) */
+        fun sameRule(r: Rule, find: String, replace: String, regex: Boolean, speech: Speech): Boolean =
+            r.find == find && r.replace == replace && r.regex == regex && r.speech == speech
+
+        /** 똑같은 규칙은 맨 앞 하나만 남긴다 (순서 유지). 하나라도 켜져 있었으면 켜진 채로 남긴다 */
+        fun dedupe(list: List<Rule>): List<Rule> {
+            data class Key(val f: String, val r: String, val x: Boolean, val s: Speech)
+            val firstIdx = LinkedHashMap<Key, Int>()
+            val out = ArrayList<Rule>(list.size)
+            for (r in list) {
+                val k = Key(r.find, r.replace, r.regex, r.speech)
+                val at = firstIdx[k]
+                if (at == null) {
+                    firstIdx[k] = out.size
+                    out.add(r)
+                } else if (r.enabled && !out[at].enabled) {
+                    out[at] = out[at].copy(enabled = true)
+                }
+            }
+            return if (out.size == list.size) list else out
+        }
+
         private fun esc(s: String): String = buildString {
             for (ch in s) when (ch) {
                 '\\' -> append("\\\\")
