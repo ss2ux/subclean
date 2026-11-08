@@ -85,16 +85,24 @@ class RuleStore(context: Context) {
         /**
          * 내보내기 형식 (메모장으로도 편집 가능):
          *   찾을 말 <TAB> 바꿀 말 <TAB> 옵션
-         * 옵션: R = 정규식, H = 높임 전용, C = 반말 전용, - = 꺼짐 (겹치면 RH-, RC 처럼 붙여 쓴다).
-         *       H/C 가 없으면 공통. 이전 버전 파일도 그대로 열린다. 줄바꿈/탭은 \n \t 로, 역슬래시는 \\ 로 적는다.
+         * 옵션: R = 정규식,
+         *       H1 = 높임1(화자 연상·청자 연하), H2 = 높임2(화자 연하·청자 연상),
+         *       H  = 예전 높임(→ 높임2로 읽음), C = 반말, - = 꺼짐.
+         *       겹치면 RH1, RH2-, RC 처럼 붙여 쓴다. H1/H2/C 가 없으면 공통.
+         *       줄바꿈/탭은 \n \t 로, 역슬래시는 \\ 로 적는다.
          * # 로 시작하는 줄은 설명(무시)
          */
         fun toTsv(rules: List<Rule>): String {
             val sb = StringBuilder()
-            sb.append("# 자막 다듬기 치환 규칙: 찾을 말<TAB>바꿀 말<TAB>옵션(R=정규식, H=높임, C=반말, -=꺼짐)\n")
+            sb.append("# 자막 다듬기 치환 규칙: 찾을 말<TAB>바꿀 말<TAB>옵션(R=정규식, H1=높임1, H2=높임2, C=반말, -=꺼짐)\n")
             for (r in rules) {
                 val flags = (if (r.regex) "R" else "") +
-                    (when (r.speech) { Speech.HONORIFIC -> "H"; Speech.CASUAL -> "C"; Speech.ALL -> "" }) +
+                    (when (r.speech) {
+                        Speech.HONORIFIC1 -> "H1"
+                        Speech.HONORIFIC2 -> "H2"
+                        Speech.CASUAL -> "C"
+                        Speech.ALL -> ""
+                    }) +
                     (if (r.enabled) "" else "-")
                 sb.append(esc(r.find)).append('\t').append(esc(r.replace))
                 if (flags.isNotEmpty()) sb.append('\t').append(flags)
@@ -114,8 +122,11 @@ class RuleStore(context: Context) {
                 if (find.isEmpty()) continue
                 val repl = if (cols.size > 1) unesc(cols[1]) else ""
                 val flags = if (cols.size > 2) cols[2].trim().uppercase() else ""
+                // H1 / H2 를 먼저 본 뒤, 예전 단독 H 는 높임2 로 취급
                 val speech = when {
-                    'H' in flags -> Speech.HONORIFIC
+                    "H1" in flags -> Speech.HONORIFIC1
+                    "H2" in flags -> Speech.HONORIFIC2
+                    'H' in flags -> Speech.HONORIFIC2   // 이전 버전 호환
                     'C' in flags -> Speech.CASUAL
                     else -> Speech.ALL
                 }

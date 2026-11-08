@@ -1,13 +1,25 @@
 package com.ss2ux.subclean
 
-/** 말투: ALL = 공통 규칙만, HONORIFIC = 높임(해요체로 통일), CASUAL = 반말(해체로 통일) */
+/**
+ * 말투 모드.
+ * - ALL: 공통 규칙만
+ * - HONORIFIC1: 화자 연상 · 청자 연하 (존대 표현을 쓰는 상황)
+ * - HONORIFIC2: 화자 연하 · 청자 연상 (전형적인 존댓말/해요체)
+ * - CASUAL: 반말(해체)로 통일
+ *
+ * 이전 버전 JSON의 "HONORIFIC" 은 HONORIFIC2 로 읽는다.
+ */
 enum class Speech(val chipLabel: String, val ruleLabel: String) {
     ALL("공통만", "공통"),
-    HONORIFIC("높임", "높임"),
+    HONORIFIC1("높임1", "높임1"),
+    HONORIFIC2("높임2", "높임2"),
     CASUAL("반말", "반말");
 
     companion object {
-        fun fromName(s: String?): Speech = values().firstOrNull { it.name == s } ?: ALL
+        fun fromName(s: String?): Speech = when (s) {
+            "HONORIFIC" -> HONORIFIC2   // 이전 버전 호환
+            else -> values().firstOrNull { it.name == s } ?: ALL
+        }
     }
 }
 

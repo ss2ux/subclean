@@ -366,7 +366,8 @@ private fun SpeechRow(vm: AppViewModel) {
         Text(
             when (cur) {
                 Speech.ALL -> "공통 규칙만 적용해요"
-                Speech.HONORIFIC -> "공통 + 높임 규칙: 존댓말(해요체)로 통일해요"
+                Speech.HONORIFIC1 -> "공통 + 높임1: 화자 연상 · 청자 연하 (존대 표현)"
+                Speech.HONORIFIC2 -> "공통 + 높임2: 화자 연하 · 청자 연상 (해요체 존댓말)"
                 Speech.CASUAL -> "공통 + 반말 규칙: 반말(해체)로 통일해요"
             },
             fontSize = 12.sp,
@@ -513,7 +514,8 @@ private fun RulesScreen(vm: AppViewModel) {
     var adding by remember { mutableStateOf(false) }
     var deleting by remember { mutableStateOf<Rule?>(null) }
     var confirmPack by remember { mutableStateOf(false) }
-    var filterIdx by rememberSaveable { mutableIntStateOf(0) }   // 0 전체, 1 공통, 2 높임, 3 반말, 4 정규식만
+    // 0 전체, 1 공통, 2 높임1, 3 높임2, 4 반말, 5 정규식만
+    var filterIdx by rememberSaveable { mutableIntStateOf(0) }
 
     var exportMenuExpanded by remember { mutableStateOf(false) }
     var exportRegexOnly by remember { mutableStateOf(false) }
@@ -540,9 +542,10 @@ private fun RulesScreen(vm: AppViewModel) {
     val shown = remember(vm.rules, q, filterIdx, sort) {
         val byFilter = when (filterIdx) {
             1 -> vm.rules.filter { it.speech == Speech.ALL }
-            2 -> vm.rules.filter { it.speech == Speech.HONORIFIC }
-            3 -> vm.rules.filter { it.speech == Speech.CASUAL }
-            4 -> vm.rules.filter { it.regex } // 정규식만 보기
+            2 -> vm.rules.filter { it.speech == Speech.HONORIFIC1 }
+            3 -> vm.rules.filter { it.speech == Speech.HONORIFIC2 }
+            4 -> vm.rules.filter { it.speech == Speech.CASUAL }
+            5 -> vm.rules.filter { it.regex }
             else -> vm.rules
         }
         val found = if (q.isEmpty()) byFilter
@@ -555,8 +558,9 @@ private fun RulesScreen(vm: AppViewModel) {
         }
     }
     val defaultSpeech = when (filterIdx) {
-        2 -> Speech.HONORIFIC
-        3 -> Speech.CASUAL
+        2 -> Speech.HONORIFIC1
+        3 -> Speech.HONORIFIC2
+        4 -> Speech.CASUAL
         else -> Speech.ALL
     }
 
@@ -601,7 +605,7 @@ private fun RulesScreen(vm: AppViewModel) {
             TextButton(onClick = { confirmPack = true }) { Text("말투 팩 다시 넣기") }
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            val names = listOf("전체", "공통", "높임", "반말", "정규식만")
+            val names = listOf("전체", "공통", "높임1", "높임2", "반말", "정규식만")
             for ((i, nm) in names.withIndex()) {
                 FilterChip(selected = filterIdx == i, onClick = { filterIdx = i }, label = { Text(nm) })
             }
@@ -764,7 +768,7 @@ private fun RuleDialog(
                     }
                 }
                 Text(
-                    "공통은 어느 말투에서나 적용돼요. 높임/반말은 그 말투를 골랐을 때만 적용돼요.",
+                    "공통은 어느 말투에서나 적용돼요. 높임1·높임2·반말은 그 말투를 골랐을 때만 적용돼요.",
                     fontSize = 12.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

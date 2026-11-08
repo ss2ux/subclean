@@ -9,7 +9,7 @@ data class Rule(
     val replace: String,
     val regex: Boolean = false,
     val enabled: Boolean = true,
-    val speech: Speech = Speech.ALL   // 공통 / 높임 / 반말. 공통이 아니면 그 말투를 고를 때만 적용
+    val speech: Speech = Speech.ALL   // 공통 / 높임1 / 높임2 / 반말. 공통이 아니면 그 말투를 고를 때만 적용
 )
 
 /** 반복 압축 등 다듬기 옵션 (설정 화면에서 바꾼다) */

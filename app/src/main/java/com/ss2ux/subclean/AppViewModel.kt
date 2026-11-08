@@ -384,10 +384,11 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         var added = 0
         // 팩 버전 3 이전에 설치된 옛 높임 규칙은 '...' 독백에도 요를 붙였다. 옛 문장 끝 패턴이 든 높임 규칙과
         // 새 팩의 높임 규칙은 한 번 지우고, 새 팩이 올바른 순서로 다시 넣게 한다.
+        fun isHonorific(s: Speech) = s == Speech.HONORIFIC1 || s == Speech.HONORIFIC2
         if (settingsStore.speechPackVersion < 3) {
-            val hFinds = incoming.filter { it.speech == Speech.HONORIFIC && it.regex }.map { it.find }.toSet()
+            val hFinds = incoming.filter { isHonorific(it.speech) && it.regex }.map { it.find }.toSet()
             list = list.filterNot {
-                it.speech == Speech.HONORIFIC && it.regex && (it.find in hFinds || it.find.contains("(?=[.!?…~]+"))
+                isHonorific(it.speech) && it.regex && (it.find in hFinds || it.find.contains("(?=[.!?…~]+"))
             }
         }
         val removed = rules.size - list.size
