@@ -338,7 +338,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
     // ---------------- 저장 ----------------
 
     /** overwrite = true 면 열었던 원본 파일에 덮어쓰고, false 면 target 에 새로 저장.
-     *  성공 시 결과를 클립보드에 넣는다. 치환 연쇄(A→B→C)는 Cleaner 가 한 번에 처리한다. */
+     *  성공 시 결과를 클립보드와 분할 입력칸에 넣는다. 치환 연쇄(A→B→C)는 Cleaner 가 한 번에 처리한다. */
     fun save(target: Uri?, overwrite: Boolean) {
         val d = decoded ?: return
         val dc = doc ?: return
@@ -380,8 +380,11 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
                 msg = "저장 실패: ${e.message ?: e}"
             }
             withContext(Dispatchers.Main) {
-                if (savedText != null) pendingClipboard = savedText
-                message = msg
+                if (savedText != null) {
+                    pendingClipboard = savedText
+                    insertCopiedToSplit(savedText)   // 저장하면서 복사된 글도 분할 입력칸에 넣는다
+                }
+                message = if (savedText != null) "$msg · 분할 탭에도 넣었어요" else msg
                 if (overwrite && newBytes != null) {
                     bytes = newBytes
                     forcedCharset = null
