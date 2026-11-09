@@ -188,6 +188,11 @@ class SettingsStore(context: Context) {
         get() = p.getInt("ruleSort", 0).coerceIn(0, 2)
         set(v) { p.edit().putInt("ruleSort", v).apply() }
 
+    /** 원본에 덮어쓰기 직전 원본을 vtt 폴더에 한 번 백업할지 (기본 켜짐) */
+    var backupOriginal: Boolean
+        get() = p.getBoolean("backupOriginal", true)
+        set(v) { p.edit().putBoolean("backupOriginal", v).apply() }
+
     /** 분할 탭의 글자 수 제한 (1000~5000, 기본 4500) */
     var splitLimit: Int
         get() = p.getInt("splitLimit", Splitter.DEFAULT_LIMIT).coerceIn(1000, Splitter.MAX_LIMIT)

@@ -59,6 +59,7 @@ fun SplitScreen(vm: AppViewModel) {
     ) { uri ->
         if (uri != null) vm.loadSplitFile(uri)
     }
+    val openDeepL = rememberDeepLOpener { vm.message = it }
     val chunks = vm.splitChunks
     val copied = vm.splitCopied
     // 다음에 복사할 조각 = 아직 복사하지 않은 첫 조각
@@ -138,10 +139,15 @@ fun SplitScreen(vm: AppViewModel) {
             }
         } else {
             if (next != null) {
-                Button(onClick = { copy(next) }, modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
-                    Icon(Icons.Default.ContentCopy, contentDescription = null)
-                    Spacer(Modifier.width(8.dp))
-                    Text("다음 조각 복사 (${next + 1}/${chunks.size})")
+                Row(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(onClick = { copy(next) }, modifier = Modifier.weight(1f)) {
+                        Text("다음 조각 복사 ${next + 1}/${chunks.size}", maxLines = 1, softWrap = false)
+                    }
+                    // 복사하고, 그 조각을 DeepL 앱으로 바로 보낸다 (복사가 먼저)
+                    OutlinedButton(
+                        onClick = { copy(next); openDeepL(chunks[next]) },
+                        modifier = Modifier.weight(1f)
+                    ) { Text("복사 후 DeepL", maxLines = 1, softWrap = false) }
                 }
             } else {
                 Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {

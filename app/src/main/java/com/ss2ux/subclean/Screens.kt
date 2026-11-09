@@ -14,7 +14,10 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.compose.ui.unit.IntOffset
 import kotlinx.coroutines.launch
 import androidx.compose.foundation.layout.Arrangement
@@ -171,6 +174,8 @@ private fun CleanScreen(vm: AppViewModel) {
     ) { uri ->
         if (uri != null) vm.save(uri, false)
     }
+    val clipboard = LocalClipboardManager.current
+    val openDeepL = rememberDeepLOpener { vm.message = it }
     var onlyChanged by rememberSaveable { mutableStateOf(true) }
     var confirmOverwrite by remember { mutableStateOf(false) }
     val pullState = rememberPullToRefreshState()
@@ -225,8 +230,6 @@ private fun CleanScreen(vm: AppViewModel) {
         SpeechRow(vm)
 
         if (doc != null && dec != null) {
-            EncodingRow(vm, doc, dec)
-
             if (pv != null) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
@@ -265,6 +268,32 @@ private fun CleanScreen(vm: AppViewModel) {
                         modifier = Modifier.weight(1f)
                     ) { Text("원본에 덮어쓰기") }
                 }
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = { vm.copyResult() },
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(Icons.Default.ContentCopy, contentDescription = null)
+                        Spacer(Modifier.width(6.dp))
+                        Text("복사", maxLines = 1)
+                    }
+                    // 5천자 이하만 여기서 바로 보낸다. 넘으면 분할 탭에서 조각별로 보낸다
+                    OutlinedButton(
+                        onClick = {
+                            vm.withResultText { text ->
+                                clipboard.setText(AnnotatedString(text))   // DeepL 앱이 앞에 뜨기 전에 먼저 복사(글을 못 넘길 때를 위해). 그다음 글을 DeepL 로 바로 보낸다
+                                openDeepL(text)
+                            }
+                        },
+                        enabled = !over,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text(if (over) "DeepL (분할 필요)" else "복사 후 DeepL 열기", maxLines = 1, softWrap = false)
+                    }
+                }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     FilterChip(
                         selected = onlyChanged,
@@ -272,11 +301,6 @@ private fun CleanScreen(vm: AppViewModel) {
                         label = { Text("바뀐 줄만 보기") }
                     )
                     Spacer(Modifier.weight(1f))
-                    TextButton(onClick = { vm.copyResult() }) {
-                        Icon(Icons.Default.ContentCopy, contentDescription = null)
-                        Spacer(Modifier.width(4.dp))
-                        Text("복사")
-                    }
                     TextButton(onClick = { vm.showResult() }) { Text("결과 전체 보기") }
                 }
 
@@ -885,6 +909,24 @@ private fun SettingsScreen(vm: AppViewModel) {
         ) { vm.updateSettings(o.copy(normalize = it)) }
 
         Spacer(Modifier.height(16.dp))
+        Text("인코딩", style = MaterialTheme.typography.titleMedium)
+        val openDoc = vm.doc
+        val openDec = vm.decoded
+        if (openDoc != null && openDec != null) {
+            EncodingRow(vm, openDoc, openDec)
+        } else {
+            Text(
+                "다듬기 탭에서 파일을 열면 여기서 인코딩을 확인하고 바꿀 수 있어요. 보통은 자동 감지로 충분해요.",
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+
+        Spacer(Modifier.height(16.dp))
+        Text("원본 백업", style = MaterialTheme.typography.titleMedium)
+        BackupSection(vm)
+
+        Spacer(Modifier.height(16.dp))
         Text("제외 단어", style = MaterialTheme.typography.titleMedium)
         Text(
             "여기 넣은 말은 어떤 규칙(일반·정규식·말투·조사 보정)과 반복 압축에도 바뀌지 않아요. 단어 안에 들어 있는 부분도 지켜요. 여러 개는 쉼표(,)로 구분해서 한 번에 넣을 수 있어요.",
@@ -928,10 +970,49 @@ private fun SettingsScreen(vm: AppViewModel) {
 
         Spacer(Modifier.height(16.dp))
         Text(
-            "이 앱은 인터넷 권한이 없어 모든 처리가 기기 안에서만 이루어져요.",
+            "이 앱은 인터넷 권한이 없어 모든 처리가 기기 안에서만 이루어져요. DeepL 버튼은 DeepL 앱으로 글을 보내는 것뿐이에요.",
             fontSize = 12.sp,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
+    }
+}
+
+@Composable
+private fun BackupSection(vm: AppViewModel) {
+    val context = LocalContext.current
+    var granted by remember { mutableStateOf(OriginalBackup.hasPermission()) }
+    // 권한 허용 화면에서 돌아오면 다시 확인
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { granted = OriginalBackup.hasPermission() }
+
+    SettingSwitch(
+        "덮어쓰기 전에 원본 백업",
+        "'원본에 덮어쓰기' 직전에, 그 파일이 있는 폴더 안에 vtt 폴더를 만들고 원본을 한 번만 저장해요. 같은 이름의 백업이 이미 있으면 다시 저장하지 않아서 처음 원본이 그대로 남아요. 백업을 못 하면 덮어쓰지 않아요. '다른 이름으로 저장'은 원본이 안 바뀌니 백업하지 않아요.",
+        vm.backupOriginal
+    ) { vm.updateBackupOriginal(it) }
+    if (vm.backupOriginal) {
+        if (!OriginalBackup.supported()) {
+            Text(
+                "안드로이드 11 이상에서만 쓸 수 있어요.",
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.error
+            )
+        } else if (granted) {
+            Text(
+                "'모든 파일 접근' 권한: 허용됨",
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.primary
+            )
+        } else {
+            Text(
+                "원본 폴더에 vtt 폴더를 만들려면 '모든 파일 접근' 권한이 필요해요. 이 앱은 다른 용도로 쓰지 않아요.",
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.error
+            )
+            OutlinedButton(
+                onClick = { OriginalBackup.openPermissionSettings(context) },
+                modifier = Modifier.padding(top = 4.dp)
+            ) { Text("권한 허용하러 가기") }
+        }
     }
 }
 

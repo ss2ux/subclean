@@ -35,6 +35,9 @@ class Preview(
 /** 앱에 들어 있는 말투 팩의 버전. speech_pack.tsv 를 고쳐서 새로 넣어야 할 때 숫자를 올린다 */
 const val SPEECH_PACK_VERSION = 3   // 2: 높임 '너 -> 당신' 규칙 추가, 3: 독백(...)에는 높임 안 붙임 + 반말 '당신 -> 너'
 
+/** 원본 백업을 못 해서 덮어쓰기를 멈출 때 */
+private class BackupFailed(message: String) : Exception(message)
+
 class AppViewModel(private val app: Application) : AndroidViewModel(app) {
     private val ruleStore = RuleStore(app)
     private val settingsStore = SettingsStore(app)
@@ -49,6 +52,15 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
     // 규칙 탭 정렬: 0 최신순, 1 오래된순, 2 찾을 말 가나다순 (보기 전용)
     var ruleSort by mutableStateOf(settingsStore.ruleSort)
         private set
+
+    // 덮어쓰기 직전 원본을 같은 폴더의 vtt 폴더에 한 번 백업
+    var backupOriginal by mutableStateOf(settingsStore.backupOriginal)
+        private set
+
+    fun updateBackupOriginal(v: Boolean) {
+        backupOriginal = v
+        settingsStore.backupOriginal = v
+    }
 
     // 열린 파일
     var fileName by mutableStateOf<String?>(null)
@@ -140,6 +152,16 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
                 pendingClipboard = text
                 message = "결과를 복사했어요 (${text.length}자)"
             }
+        }
+    }
+
+    /** 지금 미리보기 결과 전체 텍스트를 만들어 [onReady] 로 준다 (메인 스레드에서 불림). DeepL 로 보내기 전 복사용 */
+    fun withResultText(onReady: (String) -> Unit) {
+        val dc = doc ?: return
+        val p = preview ?: return
+        viewModelScope.launch(Dispatchers.Default) {
+            val text = dc.render(p.newBodies)
+            withContext(Dispatchers.Main) { onReady(text) }
         }
     }
 
@@ -308,20 +330,33 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         if (uri == null) return
         busy = true
         offerAnotherPass = false
+        val doBackup = overwrite && backupOriginal
         viewModelScope.launch(Dispatchers.IO) {
             var msg = ""
             var newBytes: ByteArray? = null
             var savedText: String? = null
+            var backupNote: String? = null
             val changed = p.changedCount
             try {
+                // 덮어쓰기 전에 원본을 vtt 폴더에 한 번만 저장. 못 하면 원본을 지키려고 덮어쓰지 않는다
+                if (doBackup) {
+                    val r = OriginalBackup.backupOnce(app, uri) {
+                        app.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                    }
+                    if (!r.ok) throw BackupFailed(r.error ?: "원본 백업에 실패해서 덮어쓰지 않았어요")
+                    backupNote = r.note
+                }
                 val text = dc.render(p.newBodies)
                 val (out, note) = Encodings.encode(text, d)
                 val stream = app.contentResolver.openOutputStream(uri, "wt")
                     ?: throw IllegalStateException("파일에 쓸 수 없어요")
                 stream.use { it.write(out) }
-                msg = "저장·복사했어요 (${changed}줄 바뀜)" + (if (note != null) " · $note" else "")
+                msg = "저장·복사했어요 (${changed}줄 바뀜)" + (if (note != null) " · $note" else "") +
+                    (if (backupNote != null) " · $backupNote" else "")
                 newBytes = out
                 savedText = text
+            } catch (e: BackupFailed) {
+                msg = e.message ?: "원본 백업에 실패해서 덮어쓰지 않았어요"
             } catch (e: SecurityException) {
                 msg = "저장 권한이 없어요. '다른 이름으로 저장'을 써 주세요"
             } catch (e: Exception) {
