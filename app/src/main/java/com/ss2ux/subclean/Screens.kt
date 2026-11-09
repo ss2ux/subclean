@@ -986,7 +986,7 @@ private fun BackupSection(vm: AppViewModel) {
 
     SettingSwitch(
         "덮어쓰기 전에 원본 백업",
-        "'원본에 덮어쓰기' 직전에, 그 파일이 있는 폴더 안에 vtt 폴더를 만들고 원본을 한 번만 저장해요. 같은 이름의 백업이 이미 있으면 다시 저장하지 않아서 처음 원본이 그대로 남아요. 백업을 못 하면 덮어쓰지 않아요. '다른 이름으로 저장'은 원본이 안 바뀌니 백업하지 않아요.",
+        "'원본에 덮어쓰기' 직전에, 그 파일이 있는 폴더 안에 '원본 자막' 폴더를 만들고 원본을 한 번만 저장해요(.srt .vtt .lrc .txt 모두 같아요). 같은 이름의 백업이 이미 있으면 다시 저장하지 않아서 처음 원본이 그대로 남아요. 백업을 못 하면 덮어쓰지 않아요. '다른 이름으로 저장'은 원본이 안 바뀌니 백업하지 않아요.",
         vm.backupOriginal
     ) { vm.updateBackupOriginal(it) }
     if (vm.backupOriginal) {
@@ -1004,7 +1004,7 @@ private fun BackupSection(vm: AppViewModel) {
             )
         } else {
             Text(
-                "원본 폴더에 vtt 폴더를 만들려면 '모든 파일 접근' 권한이 필요해요. 이 앱은 다른 용도로 쓰지 않아요.",
+                "원본 폴더에 '원본 자막' 폴더를 만들려면 '모든 파일 접근' 권한이 필요해요. 이 앱은 다른 용도로 쓰지 않아요.",
                 fontSize = 12.sp,
                 color = MaterialTheme.colorScheme.error
             )

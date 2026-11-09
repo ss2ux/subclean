@@ -53,7 +53,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
     var ruleSort by mutableStateOf(settingsStore.ruleSort)
         private set
 
-    // 덮어쓰기 직전 원본을 같은 폴더의 vtt 폴더에 한 번 백업
+    // 덮어쓰기 직전 원본을 같은 폴더의 '원본 자막' 폴더에 한 번 백업
     var backupOriginal by mutableStateOf(settingsStore.backupOriginal)
         private set
 
@@ -338,7 +338,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
             var backupNote: String? = null
             val changed = p.changedCount
             try {
-                // 덮어쓰기 전에 원본을 vtt 폴더에 한 번만 저장. 못 하면 원본을 지키려고 덮어쓰지 않는다
+                // 덮어쓰기 전에 원본을 '원본 자막' 폴더에 한 번만 저장. 못 하면 원본을 지키려고 덮어쓰지 않는다
                 if (doBackup) {
                     val r = OriginalBackup.backupOnce(app, uri) {
                         app.contentResolver.openInputStream(uri)?.use { it.readBytes() }

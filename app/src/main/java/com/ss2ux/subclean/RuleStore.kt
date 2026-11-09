@@ -188,7 +188,7 @@ class SettingsStore(context: Context) {
         get() = p.getInt("ruleSort", 0).coerceIn(0, 2)
         set(v) { p.edit().putInt("ruleSort", v).apply() }
 
-    /** 원본에 덮어쓰기 직전 원본을 vtt 폴더에 한 번 백업할지 (기본 켜짐) */
+    /** 원본에 덮어쓰기 직전 원본을 '원본 자막' 폴더에 한 번 백업할지 (기본 켜짐) */
     var backupOriginal: Boolean
         get() = p.getBoolean("backupOriginal", true)
         set(v) { p.edit().putBoolean("backupOriginal", v).apply() }
