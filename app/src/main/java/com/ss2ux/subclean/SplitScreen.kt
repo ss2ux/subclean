@@ -28,6 +28,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -62,8 +63,11 @@ fun SplitScreen(vm: AppViewModel) {
     val openDeepL = rememberDeepLOpener { vm.message = it }
     val chunks = vm.splitChunks
     val copied = vm.splitCopied
-    // 다음에 복사할 조각 = 아직 복사하지 않은 첫 조각
-    val next = (0 until chunks.size).firstOrNull { it !in copied }
+    val reverse = vm.splitReverse
+    // 보여 주는 순서이자 복사하는 순서. 역순이면 마지막 조각 → 조각 1
+    val order = if (reverse) chunks.indices.reversed().toList() else chunks.indices.toList()
+    // 다음에 복사할 조각 = 복사 순서에서 아직 복사하지 않은 첫 조각
+    val next = order.firstOrNull { it !in copied }
 
     fun copy(i: Int) {
         if (i !in chunks.indices) return
@@ -130,6 +134,18 @@ fun SplitScreen(vm: AppViewModel) {
             )
         }
 
+        Row(Modifier.fillMaxWidth().padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("마지막 조각부터 복사", fontSize = 13.sp)
+                Text(
+                    "조각 1이 클립보드 기록 맨 위에 와요",
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Switch(checked = reverse, onCheckedChange = { vm.updateSplitReverse(it) })
+        }
+
         if (chunks.isEmpty()) {
             Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
                 Text(
@@ -167,7 +183,8 @@ fun SplitScreen(vm: AppViewModel) {
                 Modifier.weight(1f).fillMaxWidth().padding(top = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                items(count = chunks.size, key = { it }) { i ->
+                items(count = order.size, key = { order[it] }) { pos ->
+                    val i = order[pos]
                     val text = chunks[i]
                     val done = i in copied
                     val isNext = i == next

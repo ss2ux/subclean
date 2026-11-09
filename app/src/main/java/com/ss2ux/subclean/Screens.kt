@@ -343,7 +343,7 @@ private fun CleanScreen(vm: AppViewModel) {
     }
 
     // 결과 전체 보기 (수동). 저장 후에는 자동으로 띄우지 않고 클립보드에만 넣는다.
-    vm.resultText?.let { text -> ResultDialog(text) { vm.closeResult() } }
+    vm.resultText?.let { text -> ResultDialog(text, onCopied = { vm.insertCopiedToSplit(it) }) { vm.closeResult() } }
 
     // 덮어쓰기 확인 — 저장 직후 결과 창이 더 이상 안 뜨므로 가려지지 않음
     if (confirmOverwrite) {
@@ -465,7 +465,7 @@ private fun SpeechRow(vm: AppViewModel) {
 }
 
 @Composable
-private fun ResultDialog(text: String, onClose: () -> Unit) {
+private fun ResultDialog(text: String, onCopied: (String) -> Unit, onClose: () -> Unit) {
     val clip = LocalClipboardManager.current
     var copied by remember { mutableStateOf(false) }
     var copyError by remember { mutableStateOf(false) }
@@ -484,6 +484,7 @@ private fun ResultDialog(text: String, onClose: () -> Unit) {
                     onClick = {
                         try {
                             clip.setText(AnnotatedString(text))
+                            onCopied(text)   // 복사한 글을 분할 탭에도 넣는다
                             copied = true
                             copyError = false
                         } catch (e: Exception) {

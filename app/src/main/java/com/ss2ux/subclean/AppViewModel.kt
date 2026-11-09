@@ -106,7 +106,13 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         private set
     var splitCopied by mutableStateOf<Set<Int>>(emptySet())
         private set
+    // true 면 마지막 조각부터 조각 1까지 거꾸로 복사한다 (클립보드 기록은 나중에 복사한 게 위에 보여서)
+    var splitReverse by mutableStateOf(settingsStore.splitReverse)
+        private set
     private var splitJob: Job? = null
+    // 분할 입력칸의 글이 '다듬기 탭에서 복사할 때 자동으로 들어온 것'이면 true.
+    // 사용자가 직접 고치거나 지우거나 파일·자막을 가져오면 false 가 되어, 파일이 바뀌어도 지우지 않는다
+    private var splitAutoInserted = false
 
     var message by mutableStateOf<String?>(null)
     var busy by mutableStateOf(false)
@@ -150,18 +156,23 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
             val text = dc.render(p.newBodies)
             withContext(Dispatchers.Main) {
                 pendingClipboard = text
-                message = "결과를 복사했어요 (${text.length}자)"
+                insertCopiedToSplit(text)
+                message = "결과를 복사했어요 (${text.length}자) · 분할 탭에도 넣었어요"
             }
         }
     }
 
-    /** 지금 미리보기 결과 전체 텍스트를 만들어 [onReady] 로 준다 (메인 스레드에서 불림). DeepL 로 보내기 전 복사용 */
+    /** 지금 미리보기 결과 전체 텍스트를 만들어 [onReady] 로 준다 (메인 스레드에서 불림). DeepL 로 보내기 전 복사용.
+     *  복사하는 글이므로 분할 입력칸에도 같이 넣는다 */
     fun withResultText(onReady: (String) -> Unit) {
         val dc = doc ?: return
         val p = preview ?: return
         viewModelScope.launch(Dispatchers.Default) {
             val text = dc.render(p.newBodies)
-            withContext(Dispatchers.Main) { onReady(text) }
+            withContext(Dispatchers.Main) {
+                insertCopiedToSplit(text)
+                onReady(text)
+            }
         }
     }
 
@@ -189,6 +200,12 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
                     withContext(Dispatchers.Main) { message = "파일이 너무 커요 (20MB 초과)" }
                 } else {
                     withContext(Dispatchers.Main) {
+                        // 다른 파일로 바뀌면, 복사 때 자동으로 들어왔던 분할 입력칸의 글은 지운다
+                        if (fileUri != uri && splitAutoInserted) {
+                            splitText = ""
+                            splitAutoInserted = false
+                            resplit()
+                        }
                         bytes = data
                         fileUri = uri
                         fileName = name
@@ -377,9 +394,23 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
 
     // ---------------- 분할 ----------------
 
+    /** 사용자가 직접 넣거나 고친 글 (붙여 넣기, 파일 열기, 자막 가져오기, 지우기) */
     fun updateSplitText(t: String) {
+        splitAutoInserted = false
         splitText = t
         resplit()
+    }
+
+    /** 다듬기 탭에서 결과를 복사하면 같은 글을 분할 입력칸에도 넣는다. 파일이 바뀌면 자동으로 지워진다 */
+    fun insertCopiedToSplit(text: String) {
+        splitText = text
+        splitAutoInserted = true
+        resplit()
+    }
+
+    fun updateSplitReverse(v: Boolean) {
+        splitReverse = v
+        settingsStore.splitReverse = v
     }
 
     fun updateSplitLimit(v: Int) {

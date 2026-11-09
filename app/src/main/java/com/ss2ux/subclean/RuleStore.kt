@@ -198,6 +198,11 @@ class SettingsStore(context: Context) {
         get() = p.getInt("splitLimit", Splitter.DEFAULT_LIMIT).coerceIn(1000, Splitter.MAX_LIMIT)
         set(v) { p.edit().putInt("splitLimit", v.coerceIn(1000, Splitter.MAX_LIMIT)).apply() }
 
+    /** 분할 탭에서 마지막 조각부터 1번까지 거꾸로 복사할지 (기본 켜짐) */
+    var splitReverse: Boolean
+        get() = p.getBoolean("splitReverse", true)
+        set(v) { p.edit().putBoolean("splitReverse", v).apply() }
+
     /** 마지막으로 연 자막 파일 URI (파일 선택기 시작 위치용). 없으면 null */
     var lastOpenUri: String?
         get() = p.getString("lastOpenUri", null)
