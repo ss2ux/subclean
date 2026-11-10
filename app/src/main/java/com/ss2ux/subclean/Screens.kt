@@ -608,7 +608,7 @@ private fun RulesScreen(vm: AppViewModel) {
     var adding by remember { mutableStateOf(false) }
     var deleting by remember { mutableStateOf<Rule?>(null) }
     var showCheck by remember { mutableStateOf(false) }
-    // 0 전체, 1 공통, 2 높임1, 3 높임2, 4 반말, 5 정규식만
+    // 0 전체, 1 공통, 2 높임1, 3 높임2, 4 반말, 5 정규식만, 6 다듬기 전용
     var filterIdx by rememberSaveable { mutableIntStateOf(0) }
 
     var exportMenuExpanded by remember { mutableStateOf(false) }
@@ -640,6 +640,7 @@ private fun RulesScreen(vm: AppViewModel) {
             3 -> vm.rules.filter { it.speech == Speech.HONORIFIC2 }
             4 -> vm.rules.filter { it.speech == Speech.CASUAL }
             5 -> vm.rules.filter { it.regex }
+            6 -> vm.rules.filter { it.polish }
             else -> vm.rules
         }
         val found = if (q.isEmpty()) byFilter
@@ -657,6 +658,7 @@ private fun RulesScreen(vm: AppViewModel) {
         4 -> Speech.CASUAL
         else -> Speech.ALL
     }
+    val defaultPolish = filterIdx == 6
 
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
         Spacer(Modifier.height(12.dp))
@@ -700,7 +702,7 @@ private fun RulesScreen(vm: AppViewModel) {
             Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            val names = listOf("전체", "공통", "높임1", "높임2", "반말", "정규식만")
+            val names = listOf("전체", "공통", "높임1", "높임2", "반말", "정규식만", "다듬기")
             for ((i, nm) in names.withIndex()) {
                 FilterChip(
                     selected = filterIdx == i,
@@ -767,11 +769,12 @@ private fun RulesScreen(vm: AppViewModel) {
                                     maxLines = 2,
                                     overflow = TextOverflow.Ellipsis
                                 )
-                                if (r.regex || r.speech != Speech.ALL) {
+                                if (r.regex || r.speech != Speech.ALL || r.polish) {
                                     Text(
                                         listOfNotNull(
                                             if (r.regex) "정규식" else null,
-                                            if (r.speech != Speech.ALL) r.speech.ruleLabel else null
+                                            if (r.speech != Speech.ALL) r.speech.ruleLabel else null,
+                                            if (r.polish) "다듬기" else null
                                         ).joinToString(" · "),
                                         fontSize = 11.sp,
                                         color = MaterialTheme.colorScheme.primary
@@ -804,18 +807,20 @@ private fun RulesScreen(vm: AppViewModel) {
         RuleDialog(
             initial = null,
             defaultSpeech = defaultSpeech,
+            defaultPolish = defaultPolish,
             onDismiss = { adding = false },
             onCheck = { f, r, rx, sp, cb -> vm.precheckRule(null, f, r, rx, sp, cb) },
-            onSave = { f, r, rx, sp -> vm.addRule(f, r, rx, sp); adding = false }
+            onSave = { f, r, rx, sp, pl -> vm.addRule(f, r, rx, sp, pl); adding = false }
         )
     }
     editing?.let { cur ->
         RuleDialog(
             initial = cur,
             defaultSpeech = cur.speech,
+            defaultPolish = cur.polish,
             onDismiss = { editing = null },
             onCheck = { f, r, rx, sp, cb -> vm.precheckRule(cur.id, f, r, rx, sp, cb) },
-            onSave = { f, r, rx, sp -> vm.updateRule(cur.copy(find = f, replace = r, regex = rx, speech = sp)); editing = null }
+            onSave = { f, r, rx, sp, pl -> vm.updateRule(cur.copy(find = f, replace = r, regex = rx, speech = sp, polish = pl)); editing = null }
         )
     }
     deleting?.let { cur ->
@@ -835,9 +840,10 @@ private fun RulesScreen(vm: AppViewModel) {
 private fun RuleDialog(
     initial: Rule?,
     defaultSpeech: Speech,
+    defaultPolish: Boolean = false,
     onDismiss: () -> Unit,
     onCheck: (String, String, Boolean, Speech, (List<Finding>) -> Unit) -> Unit,
-    onSave: (String, String, Boolean, Speech) -> Unit
+    onSave: (String, String, Boolean, Speech, Boolean) -> Unit
 ) {
     // 저장 전에 다른 규칙·제외 단어와 부딪히는지 빠르게 확인한다. 문제가 있으면 경고창을 띄우고, 그래도 저장할 수 있다
     var checking by remember { mutableStateOf(false) }
@@ -848,6 +854,7 @@ private fun RuleDialog(
     var replace by remember { mutableStateOf(initial?.replace ?: "") }
     var regex by remember { mutableStateOf(initial?.regex ?: false) }
     var speech by remember { mutableStateOf(initial?.speech ?: defaultSpeech) }
+    var polish by remember { mutableStateOf(initial?.polish ?: defaultPolish) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -887,6 +894,11 @@ private fun RuleDialog(
                     fontSize = 12.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+                Spacer(Modifier.height(8.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(checked = polish, onCheckedChange = { polish = it })
+                    Text("다듬기 전용 (한글 복구 예시 추천에만 사용)")
+                }
             }
         },
         confirmButton = {
@@ -896,7 +908,7 @@ private fun RuleDialog(
                     onCheck(find, replace, regex, speech) { fs ->
                         checking = false
                         if (alive) {
-                            if (fs.isEmpty()) onSave(find, replace, regex, speech) else warn = fs
+                            if (fs.isEmpty()) onSave(find, replace, regex, speech, polish) else warn = fs
                         }
                     }
                 },
@@ -911,7 +923,7 @@ private fun RuleDialog(
             findings = fs,
             forceLabel = "그래도 저장",
             onBack = { warn = null },
-            onForce = { warn = null; onSave(find, replace, regex, speech) }
+            onForce = { warn = null; onSave(find, replace, regex, speech, polish) }
         )
     }
 }
@@ -1139,10 +1151,10 @@ private fun MissingKoreanDialog(
     val allMissingWords = remember(items) { items.map { it.word }.distinct() }
     val missingSet = remember(allMissingWords) { allMissingWords.toSet() }
 
-    // 한국어→한국어 규칙 중, 바꿀 말(replace)이 사라진 1차 단어에 해당하는 것만 추천
+    // 다듬기 전용 규칙만 예시 추천에 사용 (한국어→한국어, 바꿀 말 = 사라진 단어)
     val recommended = remember(rules, missingSet) {
         rules.filter { r ->
-            r.enabled && !r.regex &&
+            r.enabled && r.polish && !r.regex &&
                 isHangulOnly(r.find) && isHangulOnly(r.replace) &&
                 r.replace in missingSet
         }.distinctBy { it.find to it.replace }
@@ -1154,6 +1166,7 @@ private fun MissingKoreanDialog(
     }
     var bulkFind by remember { mutableStateOf("") }
     var bulkReplace by remember { mutableStateOf("") }
+    var showWordList by remember { mutableStateOf(false) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -1161,16 +1174,25 @@ private fun MissingKoreanDialog(
         text = {
             Column {
                 Text(
-                    "1차 다듬기 때 있던 한글이 해당 줄에서 없어졌습니다.\n단어를 누르면 해당 줄이 체크됩니다.",
+                    "1차 다듬기 때 있던 한글이 해당 줄에서 없어졌습니다.\n단어를 다시 누르면 체크가 해제됩니다.",
                     fontSize = 13.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Spacer(Modifier.height(8.dp))
-                Text(
-                    "사라진 단어 전체 (${allMissingWords.size})",
-                    fontSize = 12.sp,
-                    color = MaterialTheme.colorScheme.primary
-                )
+                Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        "사라진 단어 전체 (${allMissingWords.size})",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.weight(1f)
+                    )
+                    TextButton(onClick = { showWordList = true }) {
+                        Text("목록 보기")
+                    }
+                }
                 Spacer(Modifier.height(4.dp))
                 LazyColumn(
                     modifier = Modifier
@@ -1188,7 +1210,8 @@ private fun MissingKoreanDialog(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clickable {
-                                    selectedLines = selectedLines + linesForWord
+                                    selectedLines = if (allChecked) selectedLines - linesForWord
+                                    else selectedLines + linesForWord
                                     bulkReplace = word
                                 }
                                 .padding(vertical = 3.dp, horizontal = 4.dp)
@@ -1198,12 +1221,12 @@ private fun MissingKoreanDialog(
                 if (recommended.isNotEmpty()) {
                     Spacer(Modifier.height(8.dp))
                     Text(
-                        "규칙 추천 (한국어→한국어, 바꿀 말 = 사라진 단어)",
+                        "규칙 추천 (다듬기 전용, 바꿀 말 = 사라진 단어)",
                         fontSize = 12.sp,
                         color = MaterialTheme.colorScheme.primary
                     )
                     Text(
-                        "누르면 찾을 내용·바꿀 내용에 넣고, 해당 줄도 체크합니다.",
+                        "누르면 찾을 내용·바꿀 내용에 넣고 줄을 체크합니다. 다시 누르면 해제됩니다.",
                         fontSize = 11.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -1215,16 +1238,22 @@ private fun MissingKoreanDialog(
                     ) {
                         items(recommended, key = { it.id }) { r ->
                             val linesForWord = wordToLines[r.replace].orEmpty()
+                            val allChecked = linesForWord.isNotEmpty() && linesForWord.all { it in selectedLines }
                             Text(
                                 text = "「${r.find}」 → 「${r.replace}」",
                                 fontSize = 13.sp,
-                                color = MaterialTheme.colorScheme.onSurface,
+                                color = if (allChecked) MaterialTheme.colorScheme.primary
+                                else MaterialTheme.colorScheme.onSurface,
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .clickable {
-                                        bulkFind = r.find
-                                        bulkReplace = r.replace
-                                        selectedLines = selectedLines + linesForWord
+                                        if (allChecked) {
+                                            selectedLines = selectedLines - linesForWord
+                                        } else {
+                                            bulkFind = r.find
+                                            bulkReplace = r.replace
+                                            selectedLines = selectedLines + linesForWord
+                                        }
                                     }
                                     .padding(vertical = 4.dp, horizontal = 4.dp)
                             )
@@ -1328,6 +1357,54 @@ private fun MissingKoreanDialog(
             TextButton(onClick = onDismiss) { Text("전부 무시") }
         }
     )
+
+    if (showWordList) {
+        AlertDialog(
+            onDismissRequest = { showWordList = false },
+            title = { Text("사라진 단어 목록 (${allMissingWords.size})") },
+            text = {
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 420.dp)
+                ) {
+                    items(allMissingWords, key = { it }) { word ->
+                        val linesForWord = wordToLines[word].orEmpty()
+                        val allChecked = linesForWord.isNotEmpty() && linesForWord.all { it in selectedLines }
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    selectedLines = if (allChecked) selectedLines - linesForWord
+                                    else selectedLines + linesForWord
+                                    bulkReplace = word
+                                }
+                                .padding(vertical = 6.dp, horizontal = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Checkbox(
+                                checked = allChecked,
+                                onCheckedChange = {
+                                    selectedLines = if (it) selectedLines + linesForWord
+                                    else selectedLines - linesForWord
+                                    bulkReplace = word
+                                }
+                            )
+                            Text(
+                                text = "「$word」  (${linesForWord.size}줄)",
+                                fontSize = 14.sp,
+                                color = if (allChecked) MaterialTheme.colorScheme.primary
+                                else MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showWordList = false }) { Text("닫기") }
+            }
+        )
+    }
 }
 
 /** 찾을 말·바꿀 말이 한글만으로 이뤄졌는지 (중국어 한자 제외). 공백·문장부호는 허용하지 않음 */

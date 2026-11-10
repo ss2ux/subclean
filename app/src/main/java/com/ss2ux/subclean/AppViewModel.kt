@@ -612,13 +612,13 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
 
     private fun nextId(): Long = (rules.maxOfOrNull { it.id } ?: 0L) + 1
 
-    fun addRule(find: String, replace: String, regex: Boolean, speech: Speech = Speech.ALL) {
+    fun addRule(find: String, replace: String, regex: Boolean, speech: Speech = Speech.ALL, polish: Boolean = false) {
         // 찾을 말·바꿀 말·정규식 여부·말투가 전부 같은 규칙은 다시 등록하지 않는다
         if (rules.any { RuleStore.sameRule(it, find, replace, regex, speech) }) {
             message = "똑같은 규칙이 이미 있어요"
             return
         }
-        commitRules(rules + Rule(nextId(), find, replace, regex, true, speech))
+        commitRules(rules + Rule(nextId(), find, replace, regex, true, speech, polish))
     }
 
     /**

@@ -21,7 +21,8 @@ class RuleStore(context: Context) {
                     replace = o.optString("replace"),
                     regex = o.optBoolean("regex", false),
                     enabled = o.optBoolean("enabled", true),
-                    speech = Speech.fromName(o.optString("speech", "ALL"))   // 이전 버전 파일에는 없음 -> 공통
+                    speech = Speech.fromName(o.optString("speech", "ALL")),  // 이전 버전 파일에는 없음 -> 공통
+                    polish = o.optBoolean("polish", false)
                 )
             }
         } catch (e: Exception) {
@@ -40,6 +41,7 @@ class RuleStore(context: Context) {
                     .put("regex", r.regex)
                     .put("enabled", r.enabled)
                     .put("speech", r.speech.name)
+                    .put("polish", r.polish)
             )
         }
         // 쓰다가 꺼져도 기존 파일이 깨지지 않게 임시 파일에 쓰고 바꿔치기
@@ -109,14 +111,14 @@ class RuleStore(context: Context) {
          *   찾을 말 <TAB> 바꿀 말 <TAB> 옵션
          * 옵션: R = 정규식,
          *       H1 = 높임1(화자 연상·청자 연하), H2 = 높임2(화자 연하·청자 연상),
-         *       H  = 예전 높임(→ 높임2로 읽음), C = 반말, - = 꺼짐.
-         *       겹치면 RH1, RH2-, RC 처럼 붙여 쓴다. H1/H2/C 가 없으면 공통.
+         *       H  = 예전 높임(→ 높임2로 읽음), C = 반말, P = 다듬기 전용, - = 꺼짐.
+         *       겹치면 RH1, RH2-, RC, P 처럼 붙여 쓴다. H1/H2/C 가 없으면 공통.
          *       줄바꿈/탭은 \n \t 로, 역슬래시는 \\ 로 적는다.
          * # 로 시작하는 줄은 설명(무시)
          */
         fun toTsv(rules: List<Rule>): String {
             val sb = StringBuilder()
-            sb.append("# 자막 다듬기 치환 규칙: 찾을 말<TAB>바꿀 말<TAB>옵션(R=정규식, H1=높임1, H2=높임2, C=반말, -=꺼짐)\n")
+            sb.append("# 자막 다듬기 치환 규칙: 찾을 말<TAB>바꿀 말<TAB>옵션(R=정규식, H1=높임1, H2=높임2, C=반말, P=다듬기전용, -=꺼짐)\n")
             for (r in rules) {
                 val flags = (if (r.regex) "R" else "") +
                     (when (r.speech) {
@@ -125,6 +127,7 @@ class RuleStore(context: Context) {
                         Speech.CASUAL -> "C"
                         Speech.ALL -> ""
                     }) +
+                    (if (r.polish) "P" else "") +
                     (if (r.enabled) "" else "-")
                 sb.append(esc(r.find)).append('\t').append(esc(r.replace))
                 if (flags.isNotEmpty()) sb.append('\t').append(flags)
@@ -152,7 +155,7 @@ class RuleStore(context: Context) {
                     'C' in flags -> Speech.CASUAL
                     else -> Speech.ALL
                 }
-                out.add(Rule(id++, find, repl, regex = 'R' in flags, enabled = '-' !in flags, speech = speech))
+                out.add(Rule(id++, find, repl, regex = 'R' in flags, enabled = '-' !in flags, speech = speech, polish = 'P' in flags))
             }
             return out
         }
