@@ -367,6 +367,7 @@ private fun CleanScreen(vm: AppViewModel) {
     vm.pendingMissingKoreans?.let { missing ->
         MissingKoreanDialog(
             items = missing,
+            rules = vm.rules,
             onApply = { lineMap -> vm.applyMissingKoreanFixes(lineMap) },
             onDismiss = { vm.dismissMissingKoreans() }
         )
@@ -1121,27 +1122,36 @@ private fun SettingSwitch(title: String, desc: String, checked: Boolean, onChang
 
 
 
+
 @Composable
 private fun MissingKoreanDialog(
     items: List<MissingKorean>,
+    rules: List<Rule>,
     onApply: (Map<Int, String>) -> Unit,
     onDismiss: () -> Unit
 ) {
     val lineGroups = remember(items) {
         items.groupBy { it.lineIndex }.toList().sortedBy { it.first }
     }
-    // 단어 → 그 단어가 사라진 줄 번호들
     val wordToLines = remember(items) {
         items.groupBy { it.word }.mapValues { (_, list) -> list.map { it.lineIndex }.toSet() }
     }
     val allMissingWords = remember(items) { items.map { it.word }.distinct() }
+    val missingSet = remember(allMissingWords) { allMissingWords.toSet() }
 
-    // 기본은 전부 체크 해제 — 유지할 것만 사용자가 고른다
+    // 한국어→한국어 규칙 중, 바꿀 말(replace)이 사라진 1차 단어에 해당하는 것만 추천
+    val recommended = remember(rules, missingSet) {
+        rules.filter { r ->
+            r.enabled && !r.regex &&
+                isHangulOnly(r.find) && isHangulOnly(r.replace) &&
+                r.replace in missingSet
+        }.distinctBy { it.find to it.replace }
+    }
+
     var selectedLines by remember(items) { mutableStateOf(emptySet<Int>()) }
     var lineTexts by remember(items) {
         mutableStateOf(items.associate { it.lineIndex to it.currentLine })
     }
-    // 상단 일괄 치환 (체크한 줄의 편집 칸에만 적용)
     var bulkFind by remember { mutableStateOf("") }
     var bulkReplace by remember { mutableStateOf("") }
 
@@ -1151,7 +1161,7 @@ private fun MissingKoreanDialog(
         text = {
             Column {
                 Text(
-                    "1차 다듬기 때 있던 한글이 해당 줄에서 없어졌습니다.\n단어를 누르면 해당 줄이 체크됩니다. 유지할 줄만 고른 뒤 적용하세요.",
+                    "1차 다듬기 때 있던 한글이 해당 줄에서 없어졌습니다.\n단어를 누르면 해당 줄이 체크됩니다.",
                     fontSize = 13.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -1162,35 +1172,66 @@ private fun MissingKoreanDialog(
                     color = MaterialTheme.colorScheme.primary
                 )
                 Spacer(Modifier.height(4.dp))
-                // 전체 사라진 단어 — 누르면 그 단어가 있는 줄 체크 + 찾을 내용에 넣기
                 LazyColumn(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .heightIn(max = 100.dp)
+                        .heightIn(max = 88.dp)
                 ) {
-                    items(allMissingWords.chunked(1), key = { it.first() }) { row ->
-                        // 한 단어씩 클릭 가능한 칩 형태로
-                        row.forEach { word ->
-                            val linesForWord = wordToLines[word].orEmpty()
-                            val allChecked = linesForWord.isNotEmpty() && linesForWord.all { it in selectedLines }
+                    items(allMissingWords, key = { it }) { word ->
+                        val linesForWord = wordToLines[word].orEmpty()
+                        val allChecked = linesForWord.isNotEmpty() && linesForWord.all { it in selectedLines }
+                        Text(
+                            text = "「$word」",
+                            fontSize = 13.sp,
+                            color = if (allChecked) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    selectedLines = selectedLines + linesForWord
+                                    bulkReplace = word
+                                }
+                                .padding(vertical = 3.dp, horizontal = 4.dp)
+                        )
+                    }
+                }
+                if (recommended.isNotEmpty()) {
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "규칙 추천 (한국어→한국어, 바꿀 말 = 사라진 단어)",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Text(
+                        "누르면 찾을 내용·바꿀 내용에 넣고, 해당 줄도 체크합니다.",
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    LazyColumn(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 100.dp)
+                    ) {
+                        items(recommended, key = { it.id }) { r ->
+                            val linesForWord = wordToLines[r.replace].orEmpty()
                             Text(
-                                text = "「$word」",
+                                text = "「${r.find}」 → 「${r.replace}」",
                                 fontSize = 13.sp,
-                                color = if (allChecked) MaterialTheme.colorScheme.primary
-                                else MaterialTheme.colorScheme.onSurface,
+                                color = MaterialTheme.colorScheme.onSurface,
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .clickable {
+                                        bulkFind = r.find
+                                        bulkReplace = r.replace
                                         selectedLines = selectedLines + linesForWord
-                                        bulkFind = word
                                     }
-                                    .padding(vertical = 3.dp, horizontal = 4.dp)
+                                    .padding(vertical = 4.dp, horizontal = 4.dp)
                             )
                         }
                     }
                 }
                 Spacer(Modifier.height(8.dp))
-                // 일괄 치환
                 Text("체크한 줄 일괄 치환", fontSize = 12.sp, color = MaterialTheme.colorScheme.primary)
                 Spacer(Modifier.height(4.dp))
                 OutlinedTextField(
@@ -1227,7 +1268,7 @@ private fun MissingKoreanDialog(
                 LazyColumn(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(220.dp)
+                        .height(200.dp)
                 ) {
                     items(lineGroups, key = { it.first }) { (lineIndex, group) ->
                         val checked = lineIndex in selectedLines
@@ -1287,4 +1328,11 @@ private fun MissingKoreanDialog(
             TextButton(onClick = onDismiss) { Text("전부 무시") }
         }
     )
+}
+
+/** 찾을 말·바꿀 말이 한글만으로 이뤄졌는지 (중국어 한자 제외). 공백·문장부호는 허용하지 않음 */
+private fun isHangulOnly(s: String): Boolean {
+    if (s.isBlank()) return false
+    // 한글 음절/자모만 허용
+    return s.all { it in '\uAC00'..'\uD7A3' || it in '\u1100'..'\u11FF' || it in '\u3130'..'\u318F' }
 }
