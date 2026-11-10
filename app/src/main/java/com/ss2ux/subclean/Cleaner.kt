@@ -25,6 +25,16 @@ data class CleanOptions(
     val speech: Speech = Speech.ALL    // 지금 고른 말투 (다듬기 탭 위쪽 칩). 이 말투와 공통 규칙만 적용한다
 )
 
+/** 규칙 점검(RuleCheck)이 엔진을 시험 실행할 때 남기는 기록. 실제 다듬기에는 쓰지 않는다 */
+class CleanTrace {
+    /** 글자가 실제로 바뀐 반복(pass)마다, 그때 바꾼 규칙 id 들 (순서대로) */
+    val passes = ArrayList<List<Long>>()
+    /** 최대 반복 횟수까지 돌았는데도 결과가 계속 달라졌으면 true (끝나지 않는 규칙) */
+    var hitLimit = false
+    /** 반복 압축 전의 결과 */
+    var result = ""
+}
+
 /**
  * 오프라인 텍스트 다듬기 엔진. 순서:
  *  0) (옵션) NFC 정규화
@@ -40,6 +50,7 @@ class Cleaner(rules: List<Rule>, private val opt: CleanOptions) {
     val problems = ArrayList<String>()
 
     private val plainMap = HashMap<String, String>()
+    private val plainIds = HashMap<String, Long>()   // 일반 규칙 찾을 말 -> 규칙 id (점검 기록용)
     private var plainRegex: Regex? = null
     private val regexRules = ArrayList<Triple<Rule, Regex, String>>()
     private val brokenRules = HashSet<Long>()
@@ -72,6 +83,7 @@ class Cleaner(rules: List<Rule>, private val opt: CleanOptions) {
                 }
             } else if (find != repl) {
                 plainMap[find] = repl      // 같은 찾을 말이 여러 번 있으면 아래 줄이 이긴다
+                plainIds[find] = r.id
             }
         }
         if (plainMap.isNotEmpty()) {
@@ -94,13 +106,14 @@ class Cleaner(rules: List<Rule>, private val opt: CleanOptions) {
     }
 
     /** 일반 규칙 치환. 바뀐 말 뒤에 조사가 붙어 있으면 받침에 맞게 같이 고친다 */
-    private fun replacePlain(s: String, re: Regex): String {
+    private fun replacePlain(s: String, re: Regex, fired: MutableList<Long>? = null): String {
         val sb = StringBuilder(s.length + 16)
         var pos = 0
         while (true) {
             val m = re.find(s, pos) ?: break
             sb.append(s, pos, m.range.first)
             val repl = plainMap[m.value] ?: m.value
+            if (fired != null) plainIds[m.value]?.let { fired.add(it) }
             sb.append(repl)
             var next = m.range.last + 1
             if (fixJosa && repl != m.value) {
@@ -121,7 +134,16 @@ class Cleaner(rules: List<Rule>, private val opt: CleanOptions) {
      * 서로 바꾸는 규칙이 있으면 무한 루프를 막기 위해 최대 [MAX_PASSES] 번만 돈다.
      * 반복 압축은 마지막에 한 번만 적용한다.
      */
-    fun clean(text: String): String {
+    fun clean(text: String): String = execute(text, null)
+
+    /** 점검용: clean 과 똑같이 돌리되, 어떤 규칙이 몇 번째 반복에서 글자를 바꿨는지 기록해서 돌려준다 */
+    fun trace(text: String): CleanTrace {
+        val t = CleanTrace()
+        execute(text, t)
+        return t
+    }
+
+    private fun execute(text: String, trace: CleanTrace?): String {
         var s = norm(text)
 
         // 제외 단어 보호 (줄에 원래 칸막이 글자가 있으면 보호하지 않는다)
@@ -136,13 +158,17 @@ class Cleaner(rules: List<Rule>, private val opt: CleanOptions) {
         }
 
         var passes = 0
+        var changedLast = false
         do {
             val prev = s
-            plainRegex?.let { re -> s = replacePlain(s, re) }
+            val fired = if (trace != null) ArrayList<Long>() else null
+            plainRegex?.let { re -> s = replacePlain(s, re, fired) }
             for ((rule, re, repl) in regexRules) {
                 if (rule.id in brokenRules) continue
                 try {
+                    val before = s
                     s = re.replace(s, repl)
+                    if (fired != null && s != before) fired.add(rule.id)
                 } catch (e: Exception) {
                     // 바꿀 말의 $1 같은 그룹 참조가 잘못된 경우
                     brokenRules.add(rule.id)
@@ -150,8 +176,14 @@ class Cleaner(rules: List<Rule>, private val opt: CleanOptions) {
                 }
             }
             passes++
-            if (s == prev) break
+            changedLast = s != prev
+            if (fired != null && changedLast) trace!!.passes.add(fired)
+            if (!changedLast) break
         } while (passes < MAX_PASSES)
+        if (trace != null) {
+            trace.hitLimit = changedLast && passes >= MAX_PASSES
+            trace.result = s
+        }
 
         if (opt.compressChars) s = charRe.replace(s) { m -> m.groupValues[1].repeat(keep) }
         if (opt.compressWords) s = wordRe.replace(s) { m -> List(keep) { m.groupValues[1] }.joinToString(" ") }

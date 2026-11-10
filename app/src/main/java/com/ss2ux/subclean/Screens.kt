@@ -68,6 +68,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -595,6 +596,7 @@ private fun RulesScreen(vm: AppViewModel) {
     var editing by remember { mutableStateOf<Rule?>(null) }
     var adding by remember { mutableStateOf(false) }
     var deleting by remember { mutableStateOf<Rule?>(null) }
+    var showCheck by remember { mutableStateOf(false) }
     // 0 전체, 1 공통, 2 높임1, 3 높임2, 4 반말, 5 정규식만
     var filterIdx by rememberSaveable { mutableIntStateOf(0) }
 
@@ -697,6 +699,20 @@ private fun RulesScreen(vm: AppViewModel) {
             }
         }
         Row(verticalAlignment = Alignment.CenterVertically) {
+            OutlinedButton(onClick = {
+                if (vm.ruleFindings == null || vm.checkStale) vm.runRuleCheck()
+                showCheck = true
+            }) { Text("규칙 점검") }
+            Spacer(Modifier.width(8.dp))
+            Text(
+                checkSummary(vm.ruleFindings, vm.checkStale, vm.checking),
+                fontSize = 11.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 2,
+                modifier = Modifier.weight(1f)
+            )
+        }
+        Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
                 "규칙 ${vm.rules.size}개 (켜짐 ${vm.rules.count { it.enabled }}개)",
                 style = MaterialTheme.typography.bodySmall,
@@ -762,11 +778,23 @@ private fun RulesScreen(vm: AppViewModel) {
         }
     }
 
+    if (showCheck) {
+        RuleCheckDialog(
+            findings = vm.ruleFindings,
+            checking = vm.checking,
+            stale = vm.checkStale,
+            rules = vm.rules,
+            onRecheck = { vm.runRuleCheck() },
+            onEditRule = { r -> showCheck = false; editing = r },
+            onClose = { showCheck = false }
+        )
+    }
     if (adding) {
         RuleDialog(
             initial = null,
             defaultSpeech = defaultSpeech,
             onDismiss = { adding = false },
+            onCheck = { f, r, rx, sp, cb -> vm.precheckRule(null, f, r, rx, sp, cb) },
             onSave = { f, r, rx, sp -> vm.addRule(f, r, rx, sp); adding = false }
         )
     }
@@ -775,6 +803,7 @@ private fun RulesScreen(vm: AppViewModel) {
             initial = cur,
             defaultSpeech = cur.speech,
             onDismiss = { editing = null },
+            onCheck = { f, r, rx, sp, cb -> vm.precheckRule(cur.id, f, r, rx, sp, cb) },
             onSave = { f, r, rx, sp -> vm.updateRule(cur.copy(find = f, replace = r, regex = rx, speech = sp)); editing = null }
         )
     }
@@ -796,8 +825,14 @@ private fun RuleDialog(
     initial: Rule?,
     defaultSpeech: Speech,
     onDismiss: () -> Unit,
+    onCheck: (String, String, Boolean, Speech, (List<Finding>) -> Unit) -> Unit,
     onSave: (String, String, Boolean, Speech) -> Unit
 ) {
+    // 저장 전에 다른 규칙·제외 단어와 부딪히는지 빠르게 확인한다. 문제가 있으면 경고창을 띄우고, 그래도 저장할 수 있다
+    var checking by remember { mutableStateOf(false) }
+    var warn by remember { mutableStateOf<List<Finding>?>(null) }
+    var alive by remember { mutableStateOf(true) }
+    DisposableEffect(Unit) { onDispose { alive = false } }
     var find by remember { mutableStateOf(initial?.find ?: "") }
     var replace by remember { mutableStateOf(initial?.replace ?: "") }
     var regex by remember { mutableStateOf(initial?.regex ?: false) }
@@ -844,10 +879,30 @@ private fun RuleDialog(
             }
         },
         confirmButton = {
-            TextButton(onClick = { onSave(find, replace, regex, speech) }, enabled = find.isNotEmpty()) { Text("저장") }
+            TextButton(
+                onClick = {
+                    checking = true
+                    onCheck(find, replace, regex, speech) { fs ->
+                        checking = false
+                        if (alive) {
+                            if (fs.isEmpty()) onSave(find, replace, regex, speech) else warn = fs
+                        }
+                    }
+                },
+                enabled = find.isNotEmpty() && !checking
+            ) { Text(if (checking) "확인 중…" else "저장") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("취소") } }
     )
+    warn?.let { fs ->
+        FindingsWarningDialog(
+            title = "저장하면 충돌할 수 있어요",
+            findings = fs,
+            forceLabel = "그래도 저장",
+            onBack = { warn = null },
+            onForce = { warn = null; onSave(find, replace, regex, speech) }
+        )
+    }
 }
 
 // =====================================================================
@@ -935,6 +990,7 @@ private fun SettingsScreen(vm: AppViewModel) {
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
         var protectInput by remember { mutableStateOf("") }
+        var protectWarn by remember { mutableStateOf<Pair<List<String>, List<Finding>>?>(null) }
         Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             OutlinedTextField(
                 value = protectInput,
@@ -947,10 +1003,29 @@ private fun SettingsScreen(vm: AppViewModel) {
             Button(onClick = {
                 val add = protectInput.split(',', '\n').map { it.trim() }.filter { it.isNotEmpty() }
                 if (add.isNotEmpty()) {
-                    vm.updateSettings(o.copy(protect = (o.protect + add).distinct()))
-                    protectInput = ""
+                    // 새 제외 단어가 기존 규칙의 찾을 말을 가리면(그 규칙이 안 먹게 되면) 먼저 알려 준다
+                    val warns = vm.checkProtectWords(add)
+                    if (warns.isEmpty()) {
+                        vm.updateSettings(o.copy(protect = (o.protect + add).distinct()))
+                        protectInput = ""
+                    } else {
+                        protectWarn = add to warns
+                    }
                 }
             }) { Text("추가") }
+        }
+        protectWarn?.let { (words, warns) ->
+            FindingsWarningDialog(
+                title = "제외 단어 때문에 규칙이 안 먹어요",
+                findings = warns,
+                forceLabel = "그래도 추가",
+                onBack = { protectWarn = null },
+                onForce = {
+                    vm.updateSettings(o.copy(protect = (o.protect + words).distinct()))
+                    protectInput = ""
+                    protectWarn = null
+                }
+            )
         }
         if (o.protect.isEmpty()) {
             Text(

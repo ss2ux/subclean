@@ -114,6 +114,16 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
     // 사용자가 직접 고치거나 지우거나 파일·자막을 가져오면 false 가 되어, 파일이 바뀌어도 지우지 않는다
     private var splitAutoInserted = false
 
+    // ---- 규칙 충돌 점검 ----
+    // null = 아직 점검 안 함. 규칙·제외 단어를 바꾸면 checkStale 이 true 가 되어 '다시 점검' 안내를 띄운다
+    var ruleFindings by mutableStateOf<List<Finding>?>(null)
+        private set
+    var checkStale by mutableStateOf(false)
+        private set
+    var checking by mutableStateOf(false)
+        private set
+    private var checkJob: Job? = null
+
     var message by mutableStateOf<String?>(null)
     var busy by mutableStateOf(false)
         private set
@@ -490,6 +500,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
 
     private fun commitRules(list: List<Rule>) {
         rules = list
+        checkStale = true
         viewModelScope.launch(Dispatchers.IO) { ruleStore.save(list) }
         recompute()
     }
@@ -613,8 +624,62 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
     // ---------------- 설정 ----------------
 
     fun updateSettings(o: CleanOptions) {
+        if (o.protect != settings.protect) checkStale = true
         settings = o
         settingsStore.save(o)
         recompute()
     }
+
+    // ---------------- 규칙 충돌 점검 ----------------
+
+    /** 켜진 규칙 전부(말투별)와 제외 단어를 서로 맞춰 보고 결과를 ruleFindings 에 넣는다 */
+    fun runRuleCheck() {
+        checkJob?.cancel()
+        checking = true
+        val rs = rules
+        val s = settings
+        checkJob = viewModelScope.launch(Dispatchers.Default) {
+            val res = try {
+                RuleCheck.check(rs, s)
+            } catch (e: Exception) {
+                emptyList()
+            }
+            withContext(Dispatchers.Main) {
+                ruleFindings = res
+                checkStale = false
+                checking = false
+            }
+        }
+    }
+
+    /**
+     * 규칙을 저장하기 전에, 이 규칙과 관련된 오류·경고만 빠르게 찾아 [onResult] 로 넘긴다.
+     * editId 가 null 이면 새 규칙. 참고 단계는 저장 때마다 띄우면 번거로워서 뺀다.
+     */
+    fun precheckRule(
+        editId: Long?, find: String, replace: String, regex: Boolean, speech: Speech,
+        onResult: (List<Finding>) -> Unit
+    ) {
+        val id = editId ?: nextId()
+        val enabled = editId?.let { eid -> rules.firstOrNull { it.id == eid }?.enabled } ?: true
+        val cand = Rule(id, find, replace, regex, enabled, speech)
+        val list = if (editId == null) rules + cand else rules.map { if (it.id == editId) cand else it }
+        val s = settings
+        viewModelScope.launch(Dispatchers.Default) {
+            val res = try {
+                RuleCheck.check(list, s, focusRule = id, includeInfo = false).filter { it.severity != Severity.INFO }
+            } catch (e: Exception) {
+                emptyList()
+            }
+            withContext(Dispatchers.Main) { onResult(res) }
+        }
+    }
+
+    /** 제외 단어를 넣기 전에: 이 단어가 가려서 안 먹게 되는 규칙을 찾는다 (가벼운 정적 검사라 바로 돌려준다) */
+    fun checkProtectWords(words: List<String>): List<Finding> =
+        try {
+            RuleCheck.checkProtectWords(rules, settings, words).filter { it.severity != Severity.INFO }
+        } catch (e: Exception) {
+            emptyList()
+        }
 }
