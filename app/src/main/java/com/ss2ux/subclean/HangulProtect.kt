@@ -42,14 +42,18 @@ data class MissingKorean(
  */
 fun findMissingKoreans(
     firstPass: List<FirstPassLineKorean>,
-    currentBodiesByLine: Map<Int, String>
+    currentBodiesByLine: Map<Int, String>,
+    /** 설정 > 다듬기 제외 단어. 이 목록에 있는 단어는 줄 변경 검색에서 빼 둔다 */
+    excludeWords: Collection<String> = emptyList()
 ): List<MissingKorean> {
+    val exclude = excludeWords.filter { it.isNotBlank() }.toHashSet()
     val out = ArrayList<MissingKorean>()
     var id = 0
     for (fp in firstPass) {
         val current = currentBodiesByLine[fp.lineIndex] ?: continue
         for (w in fp.words) {
             if (w.isBlank()) continue
+            if (w in exclude) continue
             if (!current.contains(w)) {
                 out.add(MissingKorean(id++, fp.lineIndex, w, current))
             }

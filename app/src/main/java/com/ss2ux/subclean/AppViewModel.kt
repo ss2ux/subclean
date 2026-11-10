@@ -313,7 +313,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         if (firstPass.isEmpty()) return
         val dc = doc ?: return
         val currentBodies = dc.lines.mapIndexed { i, ln -> i to ln.body }.toMap()
-        val missing = findMissingKoreans(firstPass, currentBodies)
+        val missing = findMissingKoreans(firstPass, currentBodies, settings.polishExclude)
         pendingMissingKoreans = if (missing.isNotEmpty()) missing else null
     }
 
