@@ -1075,43 +1075,52 @@ private fun SettingsScreen(vm: AppViewModel) {
         }
 
         Spacer(Modifier.height(16.dp))
-        Text("다듬기 제외 단어", style = MaterialTheme.typography.titleMedium)
-        Text(
-            "1차 한글이 사라진 줄 찾기(줄 변경)에서 이 단어는 검색·표시하지 않아요. 실제 자막 다듬기 규칙은 그대로 적용돼요. 여러 개는 쉼표(,)로 구분해서 한 번에 넣을 수 있어요.",
-            fontSize = 12.sp,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-        var polishExcludeInput by remember { mutableStateOf("") }
-        Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            OutlinedTextField(
-                value = polishExcludeInput,
-                onValueChange = { polishExcludeInput = it },
-                label = { Text("제외할 단어") },
-                singleLine = true,
-                modifier = Modifier.weight(1f)
-            )
-            Spacer(Modifier.width(8.dp))
-            Button(onClick = {
-                val add = polishExcludeInput.split(',', '\n').map { it.trim() }.filter { it.isNotEmpty() }
-                if (add.isNotEmpty()) {
-                    vm.updateSettings(o.copy(polishExclude = (o.polishExclude + add).distinct()))
-                    polishExcludeInput = ""
-                }
-            }) { Text("추가") }
-        }
-        if (o.polishExclude.isEmpty()) {
+        Text("다듬기 모드", style = MaterialTheme.typography.titleMedium)
+        SettingSwitch(
+            "다듬기 모드",
+            "켜면 1차 다듬기 후 DeepL 등에서 돌아온 뒤, 사라진 한글 줄을 확인하고 고칠 수 있어요. 끄면(기본) 줄 변경 확인 없이 기존처럼 바로 다듬기만 해요.",
+            o.polishMode
+        ) { vm.updateSettings(o.copy(polishMode = it)) }
+        if (o.polishMode) {
+            Spacer(Modifier.height(8.dp))
+            Text("다듬기 제외 단어", style = MaterialTheme.typography.titleSmall)
             Text(
-                "다듬기 제외 단어가 없어요",
+                "줄 변경 찾기에서 이 단어는 검색·표시하지 않아요. 실제 자막 다듬기에는 영향 없어요. 여러 개는 쉼표(,)로 구분해서 한 번에 넣을 수 있어요.",
                 fontSize = 12.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(top = 8.dp)
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-        }
-        for (w in o.polishExclude) {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text(w, modifier = Modifier.weight(1f))
-                IconButton(onClick = { vm.updateSettings(o.copy(polishExclude = o.polishExclude - w)) }) {
-                    Icon(Icons.Default.Close, contentDescription = "지우기")
+            var polishExcludeInput by remember { mutableStateOf("") }
+            Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                OutlinedTextField(
+                    value = polishExcludeInput,
+                    onValueChange = { polishExcludeInput = it },
+                    label = { Text("제외할 단어") },
+                    singleLine = true,
+                    modifier = Modifier.weight(1f)
+                )
+                Spacer(Modifier.width(8.dp))
+                Button(onClick = {
+                    val add = polishExcludeInput.split(',', '\n').map { it.trim() }.filter { it.isNotEmpty() }
+                    if (add.isNotEmpty()) {
+                        vm.updateSettings(o.copy(polishExclude = (o.polishExclude + add).distinct()))
+                        polishExcludeInput = ""
+                    }
+                }) { Text("추가") }
+            }
+            if (o.polishExclude.isEmpty()) {
+                Text(
+                    "다듬기 제외 단어가 없어요",
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 8.dp)
+                )
+            }
+            for (w in o.polishExclude) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text(w, modifier = Modifier.weight(1f))
+                    IconButton(onClick = { vm.updateSettings(o.copy(polishExclude = o.polishExclude - w)) }) {
+                        Icon(Icons.Default.Close, contentDescription = "지우기")
+                    }
                 }
             }
         }

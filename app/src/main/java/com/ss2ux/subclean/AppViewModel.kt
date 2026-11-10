@@ -307,8 +307,14 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** 새로고침 직후: 1차 때 한글이 있던 줄에서 그 단어가 사라졌는지 검사 */
+    /** 새로고침 직후: 1차 때 한글이 있던 줄에서 그 단어가 사라졌는지 검사.
+     *  다듬기 모드가 꺼져 있으면 줄 변경 확인을 하지 않는다. */
     private fun checkKoreanAfterReload() {
+        if (!settings.polishMode) {
+            firstPassLineKoreans = null
+            pendingMissingKoreans = null
+            return
+        }
         val firstPass = firstPassLineKoreans ?: return
         if (firstPass.isEmpty()) return
         val dc = doc ?: return
@@ -486,8 +492,8 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
                 if (savedText != null) {
                     pendingClipboard = savedText
                     insertCopiedToSplit(savedText)   // 저장하면서 복사된 글도 분할 입력칸에 넣는다
-                    // 1차 다듬기 후 원본 덮어쓰기일 때만: 한글이 있는 줄을 기억한다
-                    if (overwrite && firstPassLineKoreans == null) {
+                    // 다듬기 모드 + 1차 다듬기 후 원본 덮어쓰기일 때만: 한글이 있는 줄을 기억한다
+                    if (settings.polishMode && overwrite && firstPassLineKoreans == null) {
                         val list = ArrayList<FirstPassLineKorean>()
                         for ((i, ln) in dc.lines.withIndex()) {
                             if (!ln.editable) continue

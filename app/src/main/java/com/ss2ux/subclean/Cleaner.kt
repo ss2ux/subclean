@@ -23,7 +23,8 @@ data class CleanOptions(
     val compressUnits: Boolean = false, // 하하하하 하하... 같은 2~4글자 덩어리 반복 (띄어쓰기 없는 중/일어용, 실험적)
     val fixJosa: Boolean = true,       // 치환 뒤 조사 보정: 철수가 -> (영수로 바꾸면) 영수가, (민철로 바꾸면) 민철이
     val protect: List<String> = emptyList(), // 제외 단어: 이 말이 들어 있는 부분은 어떤 규칙·압축도 건드리지 않는다
-    val polishExclude: List<String> = emptyList(), // 다듬기 제외: 1차 한글 복구(줄 변경) 검색에서 빼는 단어
+    val polishMode: Boolean = false,   // 다듬기 모드: 켜면 1차 후 DeepL 반영 시 사라진 한글 줄 변경 확인
+    val polishExclude: List<String> = emptyList(), // 다듬기 제외: 줄 변경 검색에서 빼는 단어 (다듬기 모드일 때만)
     val speech: Speech = Speech.ALL    // 지금 고른 말투 (다듬기 탭 위쪽 칩). 이 말투와 공통 규칙만 적용한다
 )
 

@@ -177,6 +177,7 @@ class SettingsStore(context: Context) {
             compressUnits = p.getBoolean("compressUnits", d.compressUnits),
             fixJosa = p.getBoolean("fixJosa", d.fixJosa),
             protect = (p.getString("protect", "") ?: "").split('\n').filter { it.isNotBlank() },
+            polishMode = p.getBoolean("polishMode", d.polishMode),
             polishExclude = (p.getString("polishExclude", "") ?: "").split('\n').filter { it.isNotBlank() },
             speech = Speech.fromName(p.getString("speech", d.speech.name))
         )
@@ -227,6 +228,7 @@ class SettingsStore(context: Context) {
             .putBoolean("compressUnits", o.compressUnits)
             .putBoolean("fixJosa", o.fixJosa)
             .putString("protect", o.protect.joinToString("\n"))
+            .putBoolean("polishMode", o.polishMode)
             .putString("polishExclude", o.polishExclude.joinToString("\n"))
             .putString("speech", o.speech.name)
             .apply()
