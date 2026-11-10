@@ -362,6 +362,15 @@ private fun CleanScreen(vm: AppViewModel) {
         )
     }
 
+    // DeepL이 바꾼 한국어 복원 확인
+    vm.pendingKoreanDiffs?.let { diffs ->
+        KoreanRestoreDialog(
+            diffs = diffs,
+            onRestore = { selected -> vm.applyKoreanRestore(selected) },
+            onDismiss = { vm.dismissKoreanDiffs() }
+        )
+    }
+
     // 연쇄 치환(A→B→C)은 Cleaner 가 최대 10패스까지 자동 처리한다.
 }
 
@@ -1105,4 +1114,76 @@ private fun SettingSwitch(title: String, desc: String, checked: Boolean, onChang
         Spacer(Modifier.width(12.dp))
         Switch(checked = checked, onCheckedChange = onChange)
     }
+}
+
+@Composable
+private fun KoreanRestoreDialog(
+    diffs: List<KoreanDiff>,
+    onRestore: (Set<Int>) -> Unit,
+    onDismiss: () -> Unit
+) {
+    // 기본적으로 모든 차이를 선택한 상태로 시작
+    var selected by remember(diffs) {
+        mutableStateOf(diffs.map { it.runIndex }.toSet())
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("1차 한글과 다른 곳이 있어요") },
+        text = {
+            Column {
+                Text(
+                    "1차 다듬기 때 생긴 한글이 DeepL 결과와 ${diffs.size}곳에서 다릅니다.\n체크한 항목은 1차 한글로 되돌리고, 체크 안 한 항목은 현재(DeepL) 한글을 유지합니다.",
+                    fontSize = 13.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(12.dp))
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(280.dp)
+                ) {
+                    items(diffs, key = { it.runIndex }) { d ->
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    selected = if (d.runIndex in selected) selected - d.runIndex
+                                    else selected + d.runIndex
+                                }
+                                .padding(vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Checkbox(
+                                checked = d.runIndex in selected,
+                                onCheckedChange = {
+                                    selected = if (it) selected + d.runIndex else selected - d.runIndex
+                                }
+                            )
+                            Column(Modifier.padding(start = 4.dp)) {
+                                Text(
+                                    "1차: 「${d.original}」",
+                                    fontSize = 14.sp
+                                )
+                                Text(
+                                    "현재: 「${d.current}」",
+                                    fontSize = 14.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { onRestore(selected) },
+                enabled = selected.isNotEmpty()
+            ) { Text("선택한 ${selected.size}곳을 1차 한글로") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("전부 현재 한글 유지") }
+        }
+    )
 }
