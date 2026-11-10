@@ -362,12 +362,12 @@ private fun CleanScreen(vm: AppViewModel) {
         )
     }
 
-    // DeepL이 바꾼 한국어 복원 확인
-    vm.pendingKoreanDiffs?.let { diffs ->
-        KoreanRestoreDialog(
-            diffs = diffs,
-            onRestore = { selected -> vm.applyKoreanRestore(selected) },
-            onDismiss = { vm.dismissKoreanDiffs() }
+    // 1차 한글이 사라진 경우 복원 확인
+    vm.pendingMissingKoreans?.let { missing ->
+        MissingKoreanDialog(
+            items = missing,
+            onApply = { lineMap -> vm.applyMissingKoreanFixes(lineMap) },
+            onDismiss = { vm.dismissMissingKoreans() }
         )
     }
 
@@ -1116,24 +1116,31 @@ private fun SettingSwitch(title: String, desc: String, checked: Boolean, onChang
     }
 }
 
+
+
 @Composable
-private fun KoreanRestoreDialog(
-    diffs: List<KoreanDiff>,
-    onRestore: (Set<Int>) -> Unit,
+private fun MissingKoreanDialog(
+    items: List<MissingKorean>,
+    onApply: (Map<Int, String>) -> Unit,
     onDismiss: () -> Unit
 ) {
-    // 기본적으로 모든 차이를 선택한 상태로 시작
-    var selected by remember(diffs) {
-        mutableStateOf(diffs.map { it.runIndex }.toSet())
+    val lineGroups = remember(items) {
+        items.groupBy { it.lineIndex }.toList().sortedBy { it.first }
+    }
+    var selectedLines by remember(items) {
+        mutableStateOf(lineGroups.map { it.first }.toSet())
+    }
+    var lineTexts by remember(items) {
+        mutableStateOf(items.associate { it.lineIndex to it.currentLine })
     }
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("1차 한글과 다른 곳이 있어요") },
+        title = { Text("1차 한글이 사라진 줄이 있어요") },
         text = {
             Column {
                 Text(
-                    "1차 다듬기 때 생긴 한글이 DeepL 결과와 ${diffs.size}곳에서 다릅니다.\n체크한 항목은 1차 한글로 되돌리고, 체크 안 한 항목은 현재(DeepL) 한글을 유지합니다.",
+                    "1차 다듬기 때 있던 한글이 해당 줄에서 없어졌습니다.\n체크한 줄만 아래 내용으로 바꿉니다. 문장을 직접 고칠 수 있습니다.",
                     fontSize = 13.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -1141,36 +1148,48 @@ private fun KoreanRestoreDialog(
                 LazyColumn(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(280.dp)
+                        .height(320.dp)
                 ) {
-                    items(diffs, key = { it.runIndex }) { d ->
-                        Row(
+                    items(lineGroups, key = { it.first }) { (lineIndex, group) ->
+                        val checked = lineIndex in selectedLines
+                        Column(
                             Modifier
                                 .fillMaxWidth()
-                                .clickable {
-                                    selected = if (d.runIndex in selected) selected - d.runIndex
-                                    else selected + d.runIndex
-                                }
-                                .padding(vertical = 6.dp),
-                            verticalAlignment = Alignment.CenterVertically
+                                .padding(vertical = 8.dp)
                         ) {
-                            Checkbox(
-                                checked = d.runIndex in selected,
-                                onCheckedChange = {
-                                    selected = if (it) selected + d.runIndex else selected - d.runIndex
-                                }
-                            )
-                            Column(Modifier.padding(start = 4.dp)) {
-                                Text(
-                                    "1차: 「${d.original}」",
-                                    fontSize = 14.sp
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Checkbox(
+                                    checked = checked,
+                                    onCheckedChange = {
+                                        selectedLines = if (it) selectedLines + lineIndex
+                                        else selectedLines - lineIndex
+                                    }
                                 )
                                 Text(
-                                    "현재: 「${d.current}」",
-                                    fontSize = 14.sp,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    "줄 ${lineIndex + 1}",
+                                    fontSize = 13.sp,
+                                    color = MaterialTheme.colorScheme.primary
                                 )
                             }
+                            Text(
+                                "사라진 1차 단어: " + group.joinToString(", ") { "「${it.word}」" },
+                                fontSize = 12.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(start = 40.dp, bottom = 4.dp)
+                            )
+                            OutlinedTextField(
+                                value = lineTexts[lineIndex] ?: "",
+                                onValueChange = { v ->
+                                    lineTexts = lineTexts.toMutableMap().also { it[lineIndex] = v }
+                                },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(start = 8.dp),
+                                textStyle = androidx.compose.ui.text.TextStyle(fontSize = 14.sp),
+                                minLines = 1,
+                                maxLines = 4,
+                                enabled = checked
+                            )
                         }
                     }
                 }
@@ -1178,12 +1197,15 @@ private fun KoreanRestoreDialog(
         },
         confirmButton = {
             TextButton(
-                onClick = { onRestore(selected) },
-                enabled = selected.isNotEmpty()
-            ) { Text("선택한 ${selected.size}곳을 1차 한글로") }
+                onClick = {
+                    val map = selectedLines.associateWith { lineTexts[it] ?: "" }
+                    onApply(map)
+                },
+                enabled = selectedLines.isNotEmpty()
+            ) { Text("선택한 ${selectedLines.size}개 줄 적용") }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text("전부 현재 한글 유지") }
+            TextButton(onClick = onDismiss) { Text("전부 무시") }
         }
     )
 }

@@ -128,11 +128,11 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
     var busy by mutableStateOf(false)
         private set
 
-    // ---- 1차 다듬기에서 생성된 한글 보호 ----
-    /** 1차 다듬기(원본 덮어쓰기) 직후 추출한 한글 구간. null 이면 아직 1차 기록이 없음 */
-    private var firstPassKoreanRuns: List<String>? = null
-    /** 새로고침 후 발견한 차이. null 이면 다이얼로그를 띄우지 않음 */
-    var pendingKoreanDiffs by mutableStateOf<List<KoreanDiff>?>(null)
+    // ---- 1차 다듬기에서 생성된 한글 보호 (줄 단위) ----
+    /** 1차 다듬기 후 원본 덮어쓰기 때: 한글이 있던 줄 번호 + 그 줄의 한글 단어들 */
+    private var firstPassLineKoreans: List<FirstPassLineKorean>? = null
+    /** 새로고침 후 사라진 1차 한글 목록. null 이면 다이얼로그 없음 */
+    var pendingMissingKoreans by mutableStateOf<List<MissingKorean>?>(null)
         private set
 
     private var bytes: ByteArray? = null
@@ -228,8 +228,8 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
                         fileName = name
                         forcedCharset = null
                         // 새 파일이면 1차 한글 기억·차이 목록을 초기화
-                        firstPassKoreanRuns = null
-                        pendingKoreanDiffs = null
+                        firstPassLineKoreans = null
+                        pendingMissingKoreans = null
                         // 다음에 파일 선택기를 열 때 이 위치부터 보이도록 기억
                         lastOpenUri = uri
                         lastOpenName = name
@@ -307,48 +307,30 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** 새로고침 직후: 1차 다듬기 때 기억한 한글과 현재 파일의 한글을 비교해서 차이가 있으면 다이얼로그용 데이터를 채운다 */
+    /** 새로고침 직후: 1차 때 한글이 있던 줄에서 그 단어가 사라졌는지 검사 */
     private fun checkKoreanAfterReload() {
-        val firstPass = firstPassKoreanRuns ?: return
+        val firstPass = firstPassLineKoreans ?: return
         if (firstPass.isEmpty()) return
         val dc = doc ?: return
-        // 편집 가능한 본문만 이어 붙여서 비교 (타임스탬프·번호 줄은 제외)
-        val currentText = dc.lines.filter { it.editable }.joinToString("\n") { it.body }
-        val currentRuns = extractHangulRuns(currentText)
-        val diffs = findKoreanDiffs(firstPass, currentRuns)
-        pendingKoreanDiffs = if (diffs.isNotEmpty()) diffs else null
+        val currentBodies = dc.lines.mapIndexed { i, ln -> i to ln.body }.toMap()
+        val missing = findMissingKoreans(firstPass, currentBodies)
+        pendingMissingKoreans = if (missing.isNotEmpty()) missing else null
     }
 
-    /** 사용자가 확인 창에서 선택한 한글 구간을 1차 다듬기 때 값으로 되돌린다.
-     *  선택 집합이 비어 있으면 아무것도 하지 않고 다이얼로그만 닫는다. */
-    fun applyKoreanRestore(selectedRunIndexes: Set<Int>) {
-        val remembered = firstPassKoreanRuns
+    /**
+     * 사용자가 고른 항목을 반영한다.
+     * replacements: MissingKorean.id → 그 줄에 넣을 최종 본문 문자열
+     * (같은 줄에 여러 단어가 있으면 UI에서 줄 단위로 합쳐서 넘겨준다)
+     */
+    fun applyMissingKoreanFixes(lineReplacements: Map<Int, String>) {
         val dc = doc
-        if (remembered == null || dc == null || selectedRunIndexes.isEmpty()) {
-            pendingKoreanDiffs = null
+        if (dc == null || lineReplacements.isEmpty()) {
+            pendingMissingKoreans = null
             return
         }
-        // 각 편집 가능 줄의 본문을 돌면서 한글 구간을 순서대로 복원
-        var globalRun = 0
-        val newBodies = dc.lines.map { ln ->
-            if (!ln.editable) {
-                ln.body
-            } else {
-                val runsInLine = extractHangulRuns(ln.body)
-                val indexesForLine = (globalRun until globalRun + runsInLine.size).toSet()
-                val selectedInLine = selectedRunIndexes.intersect(indexesForLine)
-                globalRun += runsInLine.size
-                if (selectedInLine.isEmpty()) {
-                    ln.body
-                } else {
-                    // 이 줄 안에서 쓸 원본 목록 (전역 인덱스 → 원본)
-                    val lineOriginals = selectedInLine.associateWith { remembered.getOrElse(it) { "" } }
-                    restoreHangulRunsInLine(ln.body, lineOriginals, globalRun - runsInLine.size)
-                }
-            }
+        val newBodies = dc.lines.mapIndexed { i, ln ->
+            if (ln.editable && i in lineReplacements) lineReplacements[i]!! else ln.body
         }
-        // 복원된 본문으로 미리보기를 강제 갱신 (규칙 재적용 전에 원본 한글을 살린 상태)
-        // reparse 대신 직접 preview 를 만들고, 사용자가 저장할 수 있게 한다
         viewModelScope.launch(Dispatchers.Default) {
             val s = settings
             val r = rules.filter { it.speech == Speech.ALL || it.speech == s.speech }
@@ -387,44 +369,21 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
                 dialogueChars = dialogue + (dialogueLines - 1).coerceAtLeast(0)
             )
             withContext(Dispatchers.Main) {
-                // doc 의 본문을 복원된 값으로 바꾸기 위해 새 Doc 을 만든다
                 val restoredLines = dc.lines.mapIndexed { i, ln ->
                     Line(ln.prefix, newBodies[i], ln.eol, ln.editable)
                 }
                 doc = Doc(dc.kind, restoredLines)
                 preview = p
-                pendingKoreanDiffs = null
-                firstPassKoreanRuns = null   // 한 번 처리했으면 기억 해제
-                message = "선택한 ${selectedRunIndexes.size}곳을 1차 다듬기 한글로 되돌렸어요"
+                pendingMissingKoreans = null
+                firstPassLineKoreans = null
+                message = "선택한 ${lineReplacements.size}개 줄을 수정했어요"
             }
         }
     }
 
-    fun dismissKoreanDiffs() {
-        pendingKoreanDiffs = null
-        // 사용자가 무시했으므로 1차 기억도 지운다 (같은 파일에서 반복 팝업 방지)
-        firstPassKoreanRuns = null
-    }
-
-    /** 한 줄 안에서 선택된 전역 인덱스의 한글만 원본으로 교체 */
-    private fun restoreHangulRunsInLine(
-        line: String,
-        selectedOriginals: Map<Int, String>,
-        baseIndex: Int
-    ): String {
-        if (selectedOriginals.isEmpty()) return line
-        val sb = StringBuilder()
-        var last = 0
-        var local = 0
-        for (m in Regex("[가-힣ㄱ-ㅎㅏ-ㅣ]+").findAll(line)) {
-            sb.append(line, last, m.range.first)
-            val global = baseIndex + local
-            sb.append(selectedOriginals[global] ?: m.value)
-            last = m.range.last + 1
-            local++
-        }
-        sb.append(line, last, line.length)
-        return sb.toString()
+    fun dismissMissingKoreans() {
+        pendingMissingKoreans = null
+        firstPassLineKoreans = null
     }
 
     // ---------------- 다듬기 미리보기 ----------------
@@ -526,12 +485,18 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
                 if (savedText != null) {
                     pendingClipboard = savedText
                     insertCopiedToSplit(savedText)   // 저장하면서 복사된 글도 분할 입력칸에 넣는다
-                    // 1차 다듬기 후 원본 덮어쓰기일 때만 한글을 기억한다 (아직 기록이 없을 때)
-                    if (overwrite && firstPassKoreanRuns == null) {
-                        val dialogueOnly = dc.lines.mapIndexed { i, ln ->
-                            if (ln.editable) p.newBodies[i] else ""
-                        }.filter { it.isNotEmpty() }.joinToString("\n")
-                        firstPassKoreanRuns = extractHangulRuns(dialogueOnly)
+                    // 1차 다듬기 후 원본 덮어쓰기일 때만: 한글이 있는 줄을 기억한다
+                    if (overwrite && firstPassLineKoreans == null) {
+                        val list = ArrayList<FirstPassLineKorean>()
+                        for ((i, ln) in dc.lines.withIndex()) {
+                            if (!ln.editable) continue
+                            val body = p.newBodies[i]
+                            val words = extractHangulRuns(body)
+                            if (words.isNotEmpty()) {
+                                list.add(FirstPassLineKorean(i, words))
+                            }
+                        }
+                        firstPassLineKoreans = list
                     }
                 }
                 message = if (savedText != null) "$msg · 분할 탭에도 넣었어요" else msg
