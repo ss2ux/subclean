@@ -333,7 +333,8 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         }
         viewModelScope.launch(Dispatchers.Default) {
             val s = settings
-            val r = rules.filter { it.speech == Speech.ALL || it.speech == s.speech }
+            // 다듬기 전용(polish) 규칙은 한글 복구 예시 추천에만 쓰고, 실제 다듬기에는 넣지 않는다
+            val r = rules.filter { !it.polish && (it.speech == Speech.ALL || it.speech == s.speech) }
             val cleaner = Cleaner(r, s)
             val commonCleaner = if (s.speech == Speech.ALL) cleaner else Cleaner(r.filter { it.speech == Speech.ALL }, s)
             val monologue = Regex("\\.\\.|…")
@@ -396,8 +397,8 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         }
         val s = settings
         val ex = excluded
-        // 공통 규칙 + 지금 고른 말투의 규칙만 쓴다 (저장 순서는 그대로 유지: 정규식은 순서대로 적용되므로)
-        val r = rules.filter { it.speech == Speech.ALL || it.speech == s.speech }
+        // 공통 규칙 + 지금 고른 말투의 규칙만 쓴다. 다듬기 전용(polish)은 한글 복구 예시용이라 제외
+        val r = rules.filter { !it.polish && (it.speech == Speech.ALL || it.speech == s.speech) }
         job?.cancel()
         job = viewModelScope.launch(Dispatchers.Default) {
             val cleaner = Cleaner(r, s)
@@ -737,11 +738,12 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
 
     // ---------------- 규칙 충돌 점검 ----------------
 
-    /** 켜진 규칙 전부(말투별)와 제외 단어를 서로 맞춰 보고 결과를 ruleFindings 에 넣는다 */
+    /** 켜진 규칙 전부(말투별)와 제외 단어를 서로 맞춰 보고 결과를 ruleFindings 에 넣는다.
+     *  다듬기 전용(polish) 규칙은 실제 다듬기에 안 쓰이므로 점검에서도 제외한다. */
     fun runRuleCheck() {
         checkJob?.cancel()
         checking = true
-        val rs = rules
+        val rs = rules.filter { !it.polish }
         val s = settings
         checkJob = viewModelScope.launch(Dispatchers.Default) {
             val res = try {
@@ -760,6 +762,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
     /**
      * 규칙을 저장하기 전에, 이 규칙과 관련된 오류·경고만 빠르게 찾아 [onResult] 로 넘긴다.
      * editId 가 null 이면 새 규칙. 참고 단계는 저장 때마다 띄우면 번거로워서 뺀다.
+     * 다듬기 전용으로 저장하는 경우는 실제 다듬기에 안 쓰이므로 점검을 건너뛴다.
      */
     fun precheckRule(
         editId: Long?, find: String, replace: String, regex: Boolean, speech: Speech,
@@ -768,7 +771,9 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         val id = editId ?: nextId()
         val enabled = editId?.let { eid -> rules.firstOrNull { it.id == eid }?.enabled } ?: true
         val cand = Rule(id, find, replace, regex, enabled, speech)
-        val list = if (editId == null) rules + cand else rules.map { if (it.id == editId) cand else it }
+        // 기존 규칙이 polish 이거나, 후보만 놓고 볼 때는 실제 다듬기 규칙끼리만 점검
+        val list = (if (editId == null) rules + cand else rules.map { if (it.id == editId) cand else it })
+            .filter { !it.polish }
         val s = settings
         viewModelScope.launch(Dispatchers.Default) {
             val res = try {
@@ -783,7 +788,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
     /** 제외 단어를 넣기 전에: 이 단어가 가려서 안 먹게 되는 규칙을 찾는다 (가벼운 정적 검사라 바로 돌려준다) */
     fun checkProtectWords(words: List<String>): List<Finding> =
         try {
-            RuleCheck.checkProtectWords(rules, settings, words).filter { it.severity != Severity.INFO }
+            RuleCheck.checkProtectWords(rules.filter { !it.polish }, settings, words).filter { it.severity != Severity.INFO }
         } catch (e: Exception) {
             emptyList()
         }

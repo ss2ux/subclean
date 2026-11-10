@@ -897,7 +897,14 @@ private fun RuleDialog(
                 Spacer(Modifier.height(8.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Checkbox(checked = polish, onCheckedChange = { polish = it })
-                    Text("다듬기 전용 (한글 복구 예시 추천에만 사용)")
+                    Column {
+                        Text("다듬기 전용 (한글 복구 전용)")
+                        Text(
+                            "실제 자막 다듬기에는 적용되지 않고, 1차 한글이 사라진 줄 찾기 예시 추천에만 씁니다.",
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
             }
         },
@@ -1145,13 +1152,19 @@ private fun MissingKoreanDialog(
     val lineGroups = remember(items) {
         items.groupBy { it.lineIndex }.toList().sortedBy { it.first }
     }
+    // 줄 목록에서의 위치 (스크롤용)
+    val lineIndexToPos = remember(lineGroups) {
+        lineGroups.mapIndexed { pos, (li, _) -> li to pos }.toMap()
+    }
     val wordToLines = remember(items) {
-        items.groupBy { it.word }.mapValues { (_, list) -> list.map { it.lineIndex }.toSet() }
+        items.groupBy { it.word }.mapValues { (_, list) ->
+            list.map { it.lineIndex }.distinct().sorted()
+        }
     }
     val allMissingWords = remember(items) { items.map { it.word }.distinct() }
     val missingSet = remember(allMissingWords) { allMissingWords.toSet() }
 
-    // 다듬기 전용 규칙만 예시 추천에 사용 (한국어→한국어, 바꿀 말 = 사라진 단어)
+    // 다듬기 전용 규칙만 예시 추천에 사용 (실제 다듬기 엔진에는 쓰이지 않음)
     val recommended = remember(rules, missingSet) {
         rules.filter { r ->
             r.enabled && r.polish && !r.regex &&
@@ -1166,7 +1179,83 @@ private fun MissingKoreanDialog(
     }
     var bulkFind by remember { mutableStateOf("") }
     var bulkReplace by remember { mutableStateOf("") }
-    var showWordList by remember { mutableStateOf(false) }
+    var showLineList by remember { mutableStateOf(false) }
+    // 같은 예시(단어)를 연속으로 눌렀을 때 다음 줄로 순환
+    var cycleKey by remember { mutableStateOf<String?>(null) }
+    var cycleIdx by remember { mutableIntStateOf(0) }
+
+    val mainListState = rememberLazyListState()
+    val popupListState = rememberLazyListState()
+    val scope = rememberCoroutineScope()
+
+    fun jumpToLines(key: String, lines: List<Int>, alsoCheck: Boolean, find: String? = null, replace: String? = null) {
+        if (lines.isEmpty()) return
+        val next = if (cycleKey == key) (cycleIdx + 1) % lines.size else 0
+        cycleKey = key
+        cycleIdx = next
+        val targetLine = lines[next]
+        if (alsoCheck) selectedLines = selectedLines + targetLine
+        if (find != null) bulkFind = find
+        if (replace != null) bulkReplace = replace
+        val pos = lineIndexToPos[targetLine] ?: return
+        scope.launch {
+            if (showLineList) popupListState.animateScrollToItem(pos)
+            else mainListState.animateScrollToItem(pos)
+        }
+    }
+
+    @Composable
+    fun LineEditorList(state: LazyListState, tall: Boolean) {
+        LazyColumn(
+            state = state,
+            modifier = Modifier
+                .fillMaxWidth()
+                .then(if (tall) Modifier.heightIn(min = 360.dp, max = 520.dp) else Modifier.height(200.dp))
+        ) {
+            items(lineGroups, key = { it.first }) { (lineIndex, group) ->
+                val checked = lineIndex in selectedLines
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 6.dp)
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(
+                            checked = checked,
+                            onCheckedChange = {
+                                selectedLines = if (it) selectedLines + lineIndex
+                                else selectedLines - lineIndex
+                            }
+                        )
+                        Text(
+                            "줄 ${lineIndex + 1}",
+                            fontSize = 13.sp,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                    Text(
+                        "사라진 1차 단어: " + group.joinToString(", ") { "「${it.word}」" },
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(start = 40.dp, bottom = 4.dp)
+                    )
+                    OutlinedTextField(
+                        value = lineTexts[lineIndex] ?: "",
+                        onValueChange = { v ->
+                            lineTexts = lineTexts.toMutableMap().also { it[lineIndex] = v }
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(start = 8.dp),
+                        textStyle = androidx.compose.ui.text.TextStyle(fontSize = 14.sp),
+                        minLines = 1,
+                        maxLines = 6,
+                        enabled = checked
+                    )
+                }
+            }
+        }
+    }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -1174,45 +1263,34 @@ private fun MissingKoreanDialog(
         text = {
             Column {
                 Text(
-                    "1차 다듬기 때 있던 한글이 해당 줄에서 없어졌습니다.\n단어를 다시 누르면 체크가 해제됩니다.",
+                    "1차 다듬기 때 있던 한글이 해당 줄에서 없어졌습니다.\n단어·예시를 누르면 해당 줄로 이동합니다. 다시 누르면 다음 줄로 넘어갑니다.",
                     fontSize = 13.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Spacer(Modifier.height(8.dp))
-                Row(
-                    Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        "사라진 단어 전체 (${allMissingWords.size})",
-                        fontSize = 12.sp,
-                        color = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.weight(1f)
-                    )
-                    TextButton(onClick = { showWordList = true }) {
-                        Text("목록 보기")
-                    }
-                }
+                Text(
+                    "사라진 단어 (${allMissingWords.size})",
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.primary
+                )
                 Spacer(Modifier.height(4.dp))
                 LazyColumn(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .heightIn(max = 88.dp)
+                        .heightIn(max = 72.dp)
                 ) {
                     items(allMissingWords, key = { it }) { word ->
-                        val linesForWord = wordToLines[word].orEmpty()
-                        val allChecked = linesForWord.isNotEmpty() && linesForWord.all { it in selectedLines }
+                        val lines = wordToLines[word].orEmpty()
+                        val anyChecked = lines.any { it in selectedLines }
                         Text(
                             text = "「$word」",
                             fontSize = 13.sp,
-                            color = if (allChecked) MaterialTheme.colorScheme.primary
+                            color = if (anyChecked) MaterialTheme.colorScheme.primary
                             else MaterialTheme.colorScheme.onSurface,
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clickable {
-                                    selectedLines = if (allChecked) selectedLines - linesForWord
-                                    else selectedLines + linesForWord
-                                    bulkReplace = word
+                                    jumpToLines(word, lines, alsoCheck = true, replace = word)
                                 }
                                 .padding(vertical = 3.dp, horizontal = 4.dp)
                         )
@@ -1221,12 +1299,12 @@ private fun MissingKoreanDialog(
                 if (recommended.isNotEmpty()) {
                     Spacer(Modifier.height(8.dp))
                     Text(
-                        "규칙 추천 (다듬기 전용, 바꿀 말 = 사라진 단어)",
+                        "규칙 추천 (다듬기 전용 · 한글 복구 전용)",
                         fontSize = 12.sp,
                         color = MaterialTheme.colorScheme.primary
                     )
                     Text(
-                        "누르면 찾을 내용·바꿀 내용에 넣고 줄을 체크합니다. 다시 누르면 해제됩니다.",
+                        "누르면 찾을/바꿀 내용에 넣고 해당 줄로 이동합니다. 다시 누르면 다음 줄.",
                         fontSize = 11.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -1234,26 +1312,26 @@ private fun MissingKoreanDialog(
                     LazyColumn(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .heightIn(max = 100.dp)
+                            .heightIn(max = 88.dp)
                     ) {
                         items(recommended, key = { it.id }) { r ->
-                            val linesForWord = wordToLines[r.replace].orEmpty()
-                            val allChecked = linesForWord.isNotEmpty() && linesForWord.all { it in selectedLines }
+                            val lines = wordToLines[r.replace].orEmpty()
+                            val anyChecked = lines.any { it in selectedLines }
                             Text(
                                 text = "「${r.find}」 → 「${r.replace}」",
                                 fontSize = 13.sp,
-                                color = if (allChecked) MaterialTheme.colorScheme.primary
+                                color = if (anyChecked) MaterialTheme.colorScheme.primary
                                 else MaterialTheme.colorScheme.onSurface,
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .clickable {
-                                        if (allChecked) {
-                                            selectedLines = selectedLines - linesForWord
-                                        } else {
-                                            bulkFind = r.find
-                                            bulkReplace = r.replace
-                                            selectedLines = selectedLines + linesForWord
-                                        }
+                                        jumpToLines(
+                                            "rule:${r.id}",
+                                            lines,
+                                            alsoCheck = true,
+                                            find = r.find,
+                                            replace = r.replace
+                                        )
                                     }
                                     .padding(vertical = 4.dp, horizontal = 4.dp)
                             )
@@ -1281,67 +1359,26 @@ private fun MissingKoreanDialog(
                     textStyle = androidx.compose.ui.text.TextStyle(fontSize = 13.sp)
                 )
                 Spacer(Modifier.height(4.dp))
-                TextButton(
-                    onClick = {
-                        if (bulkFind.isEmpty() || selectedLines.isEmpty()) return@TextButton
-                        lineTexts = lineTexts.toMutableMap().also { m ->
-                            for (li in selectedLines) {
-                                val cur = m[li] ?: continue
-                                m[li] = cur.replace(bulkFind, bulkReplace)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    TextButton(
+                        onClick = {
+                            if (bulkFind.isEmpty() || selectedLines.isEmpty()) return@TextButton
+                            lineTexts = lineTexts.toMutableMap().also { m ->
+                                for (li in selectedLines) {
+                                    val cur = m[li] ?: continue
+                                    m[li] = cur.replace(bulkFind, bulkReplace)
+                                }
                             }
-                        }
-                    },
-                    enabled = bulkFind.isNotEmpty() && selectedLines.isNotEmpty()
-                ) { Text("체크한 줄에 치환") }
-                Spacer(Modifier.height(6.dp))
-                LazyColumn(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(200.dp)
-                ) {
-                    items(lineGroups, key = { it.first }) { (lineIndex, group) ->
-                        val checked = lineIndex in selectedLines
-                        Column(
-                            Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 6.dp)
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Checkbox(
-                                    checked = checked,
-                                    onCheckedChange = {
-                                        selectedLines = if (it) selectedLines + lineIndex
-                                        else selectedLines - lineIndex
-                                    }
-                                )
-                                Text(
-                                    "줄 ${lineIndex + 1}",
-                                    fontSize = 13.sp,
-                                    color = MaterialTheme.colorScheme.primary
-                                )
-                            }
-                            Text(
-                                "사라진 1차 단어: " + group.joinToString(", ") { "「${it.word}」" },
-                                fontSize = 12.sp,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.padding(start = 40.dp, bottom = 4.dp)
-                            )
-                            OutlinedTextField(
-                                value = lineTexts[lineIndex] ?: "",
-                                onValueChange = { v ->
-                                    lineTexts = lineTexts.toMutableMap().also { it[lineIndex] = v }
-                                },
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(start = 8.dp),
-                                textStyle = androidx.compose.ui.text.TextStyle(fontSize = 14.sp),
-                                minLines = 1,
-                                maxLines = 4,
-                                enabled = checked
-                            )
-                        }
+                        },
+                        enabled = bulkFind.isNotEmpty() && selectedLines.isNotEmpty()
+                    ) { Text("체크한 줄에 치환") }
+                    Spacer(Modifier.weight(1f))
+                    TextButton(onClick = { showLineList = true }) {
+                        Text("목록 보기")
                     }
                 }
+                Spacer(Modifier.height(4.dp))
+                LineEditorList(state = mainListState, tall = false)
             }
         },
         confirmButton = {
@@ -1358,50 +1395,26 @@ private fun MissingKoreanDialog(
         }
     )
 
-    if (showWordList) {
+    // 줄 목록 전체 팝업: 아래에서 한 줄만 보이던 영역을 넓게 열어 수정
+    if (showLineList) {
         AlertDialog(
-            onDismissRequest = { showWordList = false },
-            title = { Text("사라진 단어 목록 (${allMissingWords.size})") },
+            onDismissRequest = { showLineList = false },
+            title = {
+                Text("변경 줄 목록 (${lineGroups.size})")
+            },
             text = {
-                LazyColumn(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(max = 420.dp)
-                ) {
-                    items(allMissingWords, key = { it }) { word ->
-                        val linesForWord = wordToLines[word].orEmpty()
-                        val allChecked = linesForWord.isNotEmpty() && linesForWord.all { it in selectedLines }
-                        Row(
-                            Modifier
-                                .fillMaxWidth()
-                                .clickable {
-                                    selectedLines = if (allChecked) selectedLines - linesForWord
-                                    else selectedLines + linesForWord
-                                    bulkReplace = word
-                                }
-                                .padding(vertical = 6.dp, horizontal = 4.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Checkbox(
-                                checked = allChecked,
-                                onCheckedChange = {
-                                    selectedLines = if (it) selectedLines + linesForWord
-                                    else selectedLines - linesForWord
-                                    bulkReplace = word
-                                }
-                            )
-                            Text(
-                                text = "「$word」  (${linesForWord.size}줄)",
-                                fontSize = 14.sp,
-                                color = if (allChecked) MaterialTheme.colorScheme.primary
-                                else MaterialTheme.colorScheme.onSurface
-                            )
-                        }
-                    }
+                Column {
+                    Text(
+                        "체크한 줄만 수정·적용됩니다. 단어·예시로 이동한 위치도 여기에 반영됩니다.",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    LineEditorList(state = popupListState, tall = true)
                 }
             },
             confirmButton = {
-                TextButton(onClick = { showWordList = false }) { Text("닫기") }
+                TextButton(onClick = { showLineList = false }) { Text("닫기") }
             }
         )
     }
