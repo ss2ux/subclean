@@ -1118,6 +1118,7 @@ private fun SettingSwitch(title: String, desc: String, checked: Boolean, onChang
 
 
 
+
 @Composable
 private fun MissingKoreanDialog(
     items: List<MissingKorean>,
@@ -1127,12 +1128,14 @@ private fun MissingKoreanDialog(
     val lineGroups = remember(items) {
         items.groupBy { it.lineIndex }.toList().sortedBy { it.first }
     }
-    var selectedLines by remember(items) {
-        mutableStateOf(lineGroups.map { it.first }.toSet())
-    }
+    // 기본은 전부 체크 해제 — 유지할 것만 사용자가 고른다
+    var selectedLines by remember(items) { mutableStateOf(emptySet<Int>()) }
     var lineTexts by remember(items) {
         mutableStateOf(items.associate { it.lineIndex to it.currentLine })
     }
+    // 상단 일괄 치환 (체크한 줄의 편집 칸에만 적용)
+    var bulkFind by remember { mutableStateOf("") }
+    var bulkReplace by remember { mutableStateOf("") }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -1140,22 +1143,69 @@ private fun MissingKoreanDialog(
         text = {
             Column {
                 Text(
-                    "1차 다듬기 때 있던 한글이 해당 줄에서 없어졌습니다.\n체크한 줄만 아래 내용으로 바꿉니다. 문장을 직접 고칠 수 있습니다.",
+                    "1차 다듬기 때 있던 한글이 해당 줄에서 없어졌습니다.\n유지할 줄만 체크한 뒤, 필요하면 문장을 고치세요.",
                     fontSize = 13.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-                Spacer(Modifier.height(12.dp))
+                Spacer(Modifier.height(10.dp))
+                // 일괄 치환
+                Text("체크한 줄 일괄 치환", fontSize = 12.sp, color = MaterialTheme.colorScheme.primary)
+                Spacer(Modifier.height(4.dp))
+                OutlinedTextField(
+                    value = bulkFind,
+                    onValueChange = { bulkFind = it },
+                    label = { Text("찾을 내용") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    textStyle = androidx.compose.ui.text.TextStyle(fontSize = 13.sp)
+                )
+                Spacer(Modifier.height(4.dp))
+                OutlinedTextField(
+                    value = bulkReplace,
+                    onValueChange = { bulkReplace = it },
+                    label = { Text("바꿀 내용") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    textStyle = androidx.compose.ui.text.TextStyle(fontSize = 13.sp)
+                )
+                Spacer(Modifier.height(4.dp))
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    TextButton(
+                        onClick = {
+                            if (bulkFind.isEmpty() || selectedLines.isEmpty()) return@TextButton
+                            lineTexts = lineTexts.toMutableMap().also { m ->
+                                for (li in selectedLines) {
+                                    val cur = m[li] ?: continue
+                                    m[li] = cur.replace(bulkFind, bulkReplace)
+                                }
+                            }
+                        },
+                        enabled = bulkFind.isNotEmpty() && selectedLines.isNotEmpty()
+                    ) { Text("체크한 줄에 치환") }
+                }
+                if (items.isNotEmpty()) {
+                    Text(
+                        "사라진 단어 예: " + items.map { it.word }.distinct().take(6).joinToString(", ") { "「$it」" },
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 2.dp, bottom = 6.dp)
+                    )
+                }
+                Spacer(Modifier.height(6.dp))
                 LazyColumn(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(320.dp)
+                        .height(260.dp)
                 ) {
                     items(lineGroups, key = { it.first }) { (lineIndex, group) ->
                         val checked = lineIndex in selectedLines
                         Column(
                             Modifier
                                 .fillMaxWidth()
-                                .padding(vertical = 8.dp)
+                                .padding(vertical = 6.dp)
                         ) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Checkbox(
