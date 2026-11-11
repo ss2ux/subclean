@@ -1,0 +1,28 @@
+name: Clear All Artifacts
+
+on:
+  workflow_dispatch:   # 수동으로만 실행
+
+permissions:
+  actions: write       # 아티팩트 삭제 권한 필요
+  contents: read
+
+jobs:
+  clear:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete all existing artifacts
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "아티팩트 목록을 가져오는 중..."
+          
+          # 모든 아티팩트 ID를 가져와서 하나씩 삭제
+          gh api repos/${{ github.repository }}/actions/artifacts --paginate \
+            --jq '.artifacts[].id' \
+            | while read -r id; do
+                echo "삭제 중: $id"
+                gh api -X DELETE repos/${{ github.repository }}/actions/artifacts/$id || true
+              done
+          
+          echo "모든 아티팩트 삭제 완료!"
