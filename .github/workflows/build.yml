@@ -5,16 +5,21 @@ on:
     branches: [ main ]
   workflow_dispatch:
 
+permissions:
+  contents: read
+  actions: write  # ← 이 권한이 있어야 기존 아티팩트를 삭제할 수 있습니다.
+
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Delete all old artifacts
+      - name: Delete old artifacts
         uses: geekyeggo/delete-artifact@v5
         with:
-          name: '*'
+          name: app-debug
+          entire-workflow: true
           failOnError: false
 
       - uses: actions/setup-java@v4
