@@ -1,3 +1,6 @@
+> **[최신 갱신 3] 규칙 탭 사용자 탭 추가** (`Rule.tab`, `SettingsStore.ruleTabs`, `AppViewModel.addRuleTab/removeRuleTab`, TSV 4번째 칸).
+> 탭은 보기·분류 전용(적용 방식 불변). 이름 규칙 파일은 `일본어이름_치환규칙.tsv` (`dev_tests/gen_names.py`). 화면 코드는 컴파일 못 해 봤으니 GitHub Actions 빌드로 확인할 것.
+
 > **[최신 갱신 2] 규칙 충돌 점검 추가됨** (`RuleCheck.kt`, `RuleCheckUi.kt`, `Cleaner.trace()`).
 > 규칙 탭 '규칙 점검' 버튼, 규칙 저장 전 경고창, 제외 단어 추가 전 경고창. 단독 테스트: `dev_tests/RuleCheckTest.kt`
 > (`kotlinc Cleaner.kt Josa.kt Speech.kt RuleCheck.kt RuleCheckTest.kt -include-runtime -d t.jar` 후 `java -jar t.jar ../app/src/main/res/raw/speech_pack.tsv`).

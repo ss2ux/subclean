@@ -608,8 +608,10 @@ private fun RulesScreen(vm: AppViewModel) {
     var adding by remember { mutableStateOf(false) }
     var deleting by remember { mutableStateOf<Rule?>(null) }
     var showCheck by remember { mutableStateOf(false) }
-    // 0 전체, 1 공통, 2 높임1, 3 높임2, 4 반말, 5 정규식만, 6 다듬기 전용
+    // 0 전체, 1 공통, 2 높임1, 3 높임2, 4 반말, 5 정규식만, 6 다듬기 전용, 7~ 사용자가 만든 탭(vm.ruleTabs 순서)
     var filterIdx by rememberSaveable { mutableIntStateOf(0) }
+    var addingTab by remember { mutableStateOf(false) }
+    var deletingTab by remember { mutableStateOf<String?>(null) }
 
     var exportMenuExpanded by remember { mutableStateOf(false) }
     var exportRegexOnly by remember { mutableStateOf(false) }
@@ -633,15 +635,18 @@ private fun RulesScreen(vm: AppViewModel) {
         if (vm.rules.size > prevSize && sort == 0) listState.scrollToItem(0)
         prevSize = vm.rules.size
     }
-    val shown = remember(vm.rules, q, filterIdx, sort) {
-        val byFilter = when (filterIdx) {
+    // 사용자 탭이 지워져서 번호가 비면 전체로 본다
+    val curTab: String? = if (filterIdx >= 7) vm.ruleTabs.getOrNull(filterIdx - 7) else null
+    val fIdx = if (filterIdx >= 7 && curTab == null) 0 else filterIdx
+    val shown = remember(vm.rules, q, fIdx, sort, curTab) {
+        val byFilter = when (fIdx) {
             1 -> vm.rules.filter { it.speech == Speech.ALL }
             2 -> vm.rules.filter { it.speech == Speech.HONORIFIC1 }
             3 -> vm.rules.filter { it.speech == Speech.HONORIFIC2 }
             4 -> vm.rules.filter { it.speech == Speech.CASUAL }
             5 -> vm.rules.filter { it.regex }
             6 -> vm.rules.filter { it.polish }
-            else -> vm.rules
+            else -> if (curTab != null) vm.rules.filter { it.tab == curTab } else vm.rules
         }
         val found = if (q.isEmpty()) byFilter
         else byFilter.filter { it.find.contains(q, ignoreCase = true) || it.replace.contains(q, ignoreCase = true) }
@@ -705,10 +710,31 @@ private fun RulesScreen(vm: AppViewModel) {
             val names = listOf("전체", "공통", "높임1", "높임2", "반말", "정규식만", "다듬기")
             for ((i, nm) in names.withIndex()) {
                 FilterChip(
-                    selected = filterIdx == i,
+                    selected = fIdx == i,
                     onClick = { filterIdx = i },
                     label = { Text(nm, maxLines = 1, softWrap = false) }
                 )
+            }
+            for ((j, tn) in vm.ruleTabs.withIndex()) {
+                FilterChip(
+                    selected = fIdx == 7 + j,
+                    onClick = { filterIdx = 7 + j },
+                    label = { Text(tn, maxLines = 1, softWrap = false) }
+                )
+            }
+            TextButton(onClick = { addingTab = true }) { Text("+ 탭", maxLines = 1, softWrap = false) }
+        }
+        if (curTab != null) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "‘$curTab’ 탭 · 규칙 ${shown.size}개",
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f)
+                )
+                TextButton(onClick = { deletingTab = curTab }) {
+                    Text("이 탭 지우기", color = MaterialTheme.colorScheme.error)
+                }
             }
         }
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -769,12 +795,13 @@ private fun RulesScreen(vm: AppViewModel) {
                                     maxLines = 2,
                                     overflow = TextOverflow.Ellipsis
                                 )
-                                if (r.regex || r.speech != Speech.ALL || r.polish) {
+                                if (r.regex || r.speech != Speech.ALL || r.polish || r.tab.isNotEmpty()) {
                                     Text(
                                         listOfNotNull(
                                             if (r.regex) "정규식" else null,
                                             if (r.speech != Speech.ALL) r.speech.ruleLabel else null,
-                                            if (r.polish) "다듬기" else null
+                                            if (r.polish) "다듬기" else null,
+                                            if (r.tab.isNotEmpty()) r.tab else null
                                         ).joinToString(" · "),
                                         fontSize = 11.sp,
                                         color = MaterialTheme.colorScheme.primary
@@ -808,9 +835,11 @@ private fun RulesScreen(vm: AppViewModel) {
             initial = null,
             defaultSpeech = defaultSpeech,
             defaultPolish = defaultPolish,
+            tabs = vm.ruleTabs,
+            defaultTab = curTab ?: "",
             onDismiss = { adding = false },
             onCheck = { f, r, rx, sp, cb -> vm.precheckRule(null, f, r, rx, sp, cb) },
-            onSave = { f, r, rx, sp, pl -> vm.addRule(f, r, rx, sp, pl); adding = false }
+            onSave = { f, r, rx, sp, pl, tb -> vm.addRule(f, r, rx, sp, pl, tb); adding = false }
         )
     }
     editing?.let { cur ->
@@ -818,9 +847,70 @@ private fun RulesScreen(vm: AppViewModel) {
             initial = cur,
             defaultSpeech = cur.speech,
             defaultPolish = cur.polish,
+            tabs = vm.ruleTabs,
+            defaultTab = cur.tab,
             onDismiss = { editing = null },
             onCheck = { f, r, rx, sp, cb -> vm.precheckRule(cur.id, f, r, rx, sp, cb) },
-            onSave = { f, r, rx, sp, pl -> vm.updateRule(cur.copy(find = f, replace = r, regex = rx, speech = sp, polish = pl)); editing = null }
+            onSave = { f, r, rx, sp, pl, tb -> vm.updateRule(cur.copy(find = f, replace = r, regex = rx, speech = sp, polish = pl, tab = tb)); editing = null }
+        )
+    }
+    if (addingTab) {
+        var tabName by remember { mutableStateOf("") }
+        AlertDialog(
+            onDismissRequest = { addingTab = false },
+            title = { Text("탭 추가") },
+            text = {
+                Column {
+                    OutlinedTextField(
+                        value = tabName, onValueChange = { tabName = it },
+                        label = { Text("탭 이름 (예: 이름만)") }, singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "탭은 규칙을 모아서 보는 분류예요. 규칙을 추가·수정할 때 탭을 고를 수 있고, 적용 방식은 바뀌지 않아요.",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        if (vm.addRuleTab(tabName)) {
+                            filterIdx = 7 + vm.ruleTabs.size - 1
+                            addingTab = false
+                        }
+                    },
+                    enabled = tabName.isNotBlank()
+                ) { Text("추가") }
+            },
+            dismissButton = { TextButton(onClick = { addingTab = false }) { Text("취소") } }
+        )
+    }
+    deletingTab?.let { tn ->
+        val cnt = vm.rules.count { it.tab == tn }
+        AlertDialog(
+            onDismissRequest = { deletingTab = null },
+            title = { Text("‘$tn’ 탭을 지울까요?") },
+            text = {
+                Column {
+                    Text(
+                        if (cnt > 0) "이 탭의 규칙 ${cnt}개는 지워지지 않고 탭 표시만 없어져요. 전체 탭에서 계속 볼 수 있어요."
+                        else "비어 있는 탭이에요."
+                    )
+                    if (cnt > 0) {
+                        Spacer(Modifier.height(8.dp))
+                        TextButton(onClick = { vm.removeRuleTab(tn, deleteRules = true); filterIdx = 0; deletingTab = null }) {
+                            Text("탭과 규칙 ${cnt}개 모두 지우기", color = MaterialTheme.colorScheme.error)
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { vm.removeRuleTab(tn); filterIdx = 0; deletingTab = null }) { Text("탭만 지우기") }
+            },
+            dismissButton = { TextButton(onClick = { deletingTab = null }) { Text("취소") } }
         )
     }
     deleting?.let { cur ->
@@ -841,9 +931,11 @@ private fun RuleDialog(
     initial: Rule?,
     defaultSpeech: Speech,
     defaultPolish: Boolean = false,
+    tabs: List<String> = emptyList(),
+    defaultTab: String = "",
     onDismiss: () -> Unit,
     onCheck: (String, String, Boolean, Speech, (List<Finding>) -> Unit) -> Unit,
-    onSave: (String, String, Boolean, Speech, Boolean) -> Unit
+    onSave: (String, String, Boolean, Speech, Boolean, String) -> Unit
 ) {
     // 저장 전에 다른 규칙·제외 단어와 부딪히는지 빠르게 확인한다. 문제가 있으면 경고창을 띄우고, 그래도 저장할 수 있다
     var checking by remember { mutableStateOf(false) }
@@ -855,6 +947,7 @@ private fun RuleDialog(
     var regex by remember { mutableStateOf(initial?.regex ?: false) }
     var speech by remember { mutableStateOf(initial?.speech ?: defaultSpeech) }
     var polish by remember { mutableStateOf(initial?.polish ?: defaultPolish) }
+    var tab by remember { mutableStateOf(initial?.tab ?: defaultTab) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -894,6 +987,24 @@ private fun RuleDialog(
                     fontSize = 12.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+                val tabChoices = (tabs + tab).filter { it.isNotEmpty() }.distinct()
+                if (tabChoices.isNotEmpty()) {
+                    Spacer(Modifier.height(8.dp))
+                    Text("탭", style = MaterialTheme.typography.bodyMedium)
+                    Row(
+                        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        FilterChip(selected = tab.isEmpty(), onClick = { tab = "" }, label = { Text("없음") })
+                        for (tn in tabChoices) {
+                            FilterChip(
+                                selected = tab == tn,
+                                onClick = { tab = tn },
+                                label = { Text(tn, maxLines = 1, softWrap = false) }
+                            )
+                        }
+                    }
+                }
                 Spacer(Modifier.height(8.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Checkbox(checked = polish, onCheckedChange = { polish = it })
@@ -915,7 +1026,7 @@ private fun RuleDialog(
                     onCheck(find, replace, regex, speech) { fs ->
                         checking = false
                         if (alive) {
-                            if (fs.isEmpty()) onSave(find, replace, regex, speech, polish) else warn = fs
+                            if (fs.isEmpty()) onSave(find, replace, regex, speech, polish, tab) else warn = fs
                         }
                     }
                 },
@@ -930,7 +1041,7 @@ private fun RuleDialog(
             findings = fs,
             forceLabel = "그래도 저장",
             onBack = { warn = null },
-            onForce = { warn = null; onSave(find, replace, regex, speech, polish) }
+            onForce = { warn = null; onSave(find, replace, regex, speech, polish, tab) }
         )
     }
 }

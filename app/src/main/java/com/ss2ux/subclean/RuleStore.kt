@@ -22,7 +22,8 @@ class RuleStore(context: Context) {
                     regex = o.optBoolean("regex", false),
                     enabled = o.optBoolean("enabled", true),
                     speech = Speech.fromName(o.optString("speech", "ALL")),  // 이전 버전 파일에는 없음 -> 공통
-                    polish = o.optBoolean("polish", false)
+                    polish = o.optBoolean("polish", false),
+                    tab = o.optString("tab", "")   // 이전 버전 파일에는 없음 -> 탭 없음
                 )
             }
         } catch (e: Exception) {
@@ -42,6 +43,7 @@ class RuleStore(context: Context) {
                     .put("enabled", r.enabled)
                     .put("speech", r.speech.name)
                     .put("polish", r.polish)
+                    .put("tab", r.tab)
             )
         }
         // 쓰다가 꺼져도 기존 파일이 깨지지 않게 임시 파일에 쓰고 바꿔치기
@@ -114,11 +116,12 @@ class RuleStore(context: Context) {
          *       H  = 예전 높임(→ 높임2로 읽음), C = 반말, P = 다듬기 전용, - = 꺼짐.
          *       겹치면 RH1, RH2-, RC, P 처럼 붙여 쓴다. H1/H2/C 가 없으면 공통.
          *       줄바꿈/탭은 \n \t 로, 역슬래시는 \\ 로 적는다.
+         * 네 번째 칸(선택): 규칙 탭의 사용자 탭 이름. 옵션이 없으면 세 번째 칸은 비워 둔다 (예: 真彩<TAB>마야<TAB><TAB>이름만).
          * # 로 시작하는 줄은 설명(무시)
          */
         fun toTsv(rules: List<Rule>): String {
             val sb = StringBuilder()
-            sb.append("# 자막 다듬기 치환 규칙: 찾을 말<TAB>바꿀 말<TAB>옵션(R=정규식, H1=높임1, H2=높임2, C=반말, P=다듬기전용, -=꺼짐)\n")
+            sb.append("# 자막 다듬기 치환 규칙: 찾을 말<TAB>바꿀 말<TAB>옵션(R=정규식, H1=높임1, H2=높임2, C=반말, P=다듬기전용, -=꺼짐)<TAB>탭 이름(선택)\n")
             for (r in rules) {
                 val flags = (if (r.regex) "R" else "") +
                     (when (r.speech) {
@@ -130,7 +133,8 @@ class RuleStore(context: Context) {
                     (if (r.polish) "P" else "") +
                     (if (r.enabled) "" else "-")
                 sb.append(esc(r.find)).append('\t').append(esc(r.replace))
-                if (flags.isNotEmpty()) sb.append('\t').append(flags)
+                if (flags.isNotEmpty() || r.tab.isNotEmpty()) sb.append('\t').append(flags)
+                if (r.tab.isNotEmpty()) sb.append('\t').append(esc(r.tab))
                 sb.append('\n')
             }
             return sb.toString()
@@ -155,7 +159,8 @@ class RuleStore(context: Context) {
                     'C' in flags -> Speech.CASUAL
                     else -> Speech.ALL
                 }
-                out.add(Rule(id++, find, repl, regex = 'R' in flags, enabled = '-' !in flags, speech = speech, polish = 'P' in flags))
+                val tab = if (cols.size > 3) unesc(cols[3]).trim() else ""
+                out.add(Rule(id++, find, repl, regex = 'R' in flags, enabled = '-' !in flags, speech = speech, polish = 'P' in flags, tab = tab))
             }
             return out
         }
@@ -187,6 +192,11 @@ class SettingsStore(context: Context) {
     var speechPackVersion: Int
         get() = p.getInt("speechPackVersion", 0)
         set(v) { p.edit().putInt("speechPackVersion", v).apply() }
+
+    /** 규칙 탭에서 사용자가 직접 만든 탭 이름들 (줄바꿈으로 구분해 저장, 순서 유지) */
+    var ruleTabs: List<String>
+        get() = (p.getString("ruleTabs", "") ?: "").split('\n').map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+        set(v) { p.edit().putString("ruleTabs", v.joinToString("\n")).apply() }
 
     /** 규칙 탭 정렬 (0 = 최신순, 1 = 오래된순, 2 = 찾을 말 가나다순). 보기 전용이라 저장 순서는 바뀌지 않는다 */
     var ruleSort: Int

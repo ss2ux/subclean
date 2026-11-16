@@ -38,6 +38,13 @@ const val SPEECH_PACK_VERSION = 3   // 2: 높임 '너 -> 당신' 규칙 추가, 
 /** 원본 백업을 못 해서 덮어쓰기를 멈출 때 */
 private class BackupFailed(message: String) : Exception(message)
 
+/** 규칙 탭의 기본 칩 이름. 사용자 탭은 이 이름과 같게 만들 수 없다 */
+val BUILTIN_TAB_NAMES = setOf("전체", "공통", "높임1", "높임2", "반말", "정규식만", "다듬기")
+
+/** 저장해 둔 탭 목록 + 규칙에 붙어 있는 탭 이름(가져오기 등으로 생긴 것)을 순서대로 합친다 */
+private fun mergeRuleTabs(saved: List<String>, rules: List<Rule>): List<String> =
+    (saved + rules.map { it.tab }.filter { it.isNotEmpty() }).distinct()
+
 class AppViewModel(private val app: Application) : AndroidViewModel(app) {
     private val ruleStore = RuleStore(app)
     private val settingsStore = SettingsStore(app)
@@ -47,6 +54,10 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
     var rules by mutableStateOf(dedupedRules)
         private set
     var settings by mutableStateOf(settingsStore.load())
+        private set
+
+    // 규칙 탭에서 사용자가 만든 탭 이름들 (보기·분류 전용)
+    var ruleTabs by mutableStateOf(mergeRuleTabs(settingsStore.ruleTabs, dedupedRules))
         private set
 
     // 규칙 탭 정렬: 0 최신순, 1 오래된순, 2 찾을 말 가나다순 (보기 전용)
@@ -619,13 +630,53 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
 
     private fun nextId(): Long = (rules.maxOfOrNull { it.id } ?: 0L) + 1
 
-    fun addRule(find: String, replace: String, regex: Boolean, speech: Speech = Speech.ALL, polish: Boolean = false) {
+    private fun saveTabs(list: List<String>) {
+        ruleTabs = list
+        settingsStore.ruleTabs = list
+    }
+
+    /** 새 탭 이름에 문제가 있으면 이유를, 괜찮으면 null 을 돌려준다 */
+    fun checkTabName(raw: String): String? {
+        val n = raw.trim()
+        return when {
+            n.isEmpty() -> "탭 이름을 적어 주세요"
+            n.length > 20 -> "탭 이름은 20글자까지예요"
+            n.any { it == '\t' || it == '\n' || it == '\r' } -> "탭 이름에는 줄바꿈이나 탭 글자를 쓸 수 없어요"
+            n in BUILTIN_TAB_NAMES -> "기본 탭에 이미 있는 이름이에요"
+            n in ruleTabs -> "같은 이름의 탭이 이미 있어요"
+            else -> null
+        }
+    }
+
+    fun addRuleTab(raw: String): Boolean {
+        val err = checkTabName(raw)
+        if (err != null) {
+            message = err
+            return false
+        }
+        saveTabs(ruleTabs + raw.trim())
+        return true
+    }
+
+    /** 탭을 지운다. deleteRules = false 면 그 탭의 규칙은 남기고 탭 표시만 뺀다 */
+    fun removeRuleTab(name: String, deleteRules: Boolean = false) {
+        saveTabs(ruleTabs.filter { it != name })
+        if (rules.any { it.tab == name }) {
+            commitRules(
+                if (deleteRules) rules.filter { it.tab != name }
+                else rules.map { if (it.tab == name) it.copy(tab = "") else it }
+            )
+        }
+    }
+
+    fun addRule(find: String, replace: String, regex: Boolean, speech: Speech = Speech.ALL, polish: Boolean = false, tab: String = "") {
         // 찾을 말·바꿀 말·정규식 여부·말투가 전부 같은 규칙은 다시 등록하지 않는다
         if (rules.any { RuleStore.sameRule(it, find, replace, regex, speech) }) {
             message = "똑같은 규칙이 이미 있어요"
             return
         }
-        commitRules(rules + Rule(nextId(), find, replace, regex, true, speech, polish))
+        commitRules(rules + Rule(nextId(), find, replace, regex, true, speech, polish, tab))
+        if (tab.isNotEmpty() && tab !in ruleTabs) saveTabs(ruleTabs + tab)
     }
 
     /**
@@ -681,6 +732,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
             return
         }
         commitRules(rules.map { if (it.id == r.id) r else it })
+        if (r.tab.isNotEmpty() && r.tab !in ruleTabs) saveTabs(ruleTabs + r.tab)
     }
 
     fun deleteRule(id: Long) {
@@ -705,11 +757,20 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
                             list = list + r.copy(id = (list.maxOfOrNull { it.id } ?: 0L) + 1)
                             added++
                         } else {
-                            list = list.map { if (it.id == same.id) it.copy(replace = r.replace, enabled = r.enabled) else it }
+                            list = list.map {
+                                if (it.id == same.id) it.copy(
+                                    replace = r.replace,
+                                    enabled = r.enabled,
+                                    tab = if (r.tab.isNotEmpty()) r.tab else it.tab
+                                ) else it
+                            }
                             updated++
                         }
                     }
-                    commitRules(RuleStore.dedupe(list))
+                    val finalList = RuleStore.dedupe(list)
+                    commitRules(finalList)
+                    val mergedTabs = mergeRuleTabs(ruleTabs, finalList)
+                    if (mergedTabs != ruleTabs) saveTabs(mergedTabs)
                     message = "규칙 가져오기: ${added}개 추가, ${updated}개 갱신"
                 }
             } catch (e: Exception) {

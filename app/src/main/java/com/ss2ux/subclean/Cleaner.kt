@@ -10,7 +10,8 @@ data class Rule(
     val regex: Boolean = false,
     val enabled: Boolean = true,
     val speech: Speech = Speech.ALL,  // 공통 / 높임1 / 높임2 / 반말. 공통이 아니면 그 말투를 고를 때만 적용
-    val polish: Boolean = false       // 다듬기 전용: 1차 한글 복구 예시 추천에만 사용
+    val polish: Boolean = false,      // 다듬기 전용: 1차 한글 복구 예시 추천에만 사용
+    val tab: String = ""              // 규칙 탭의 사용자 탭 이름 (예: 이름만). 보기·분류용이라 적용 방식에는 영향 없음. 빈 값 = 탭 없음
 )
 
 /** 반복 압축 등 다듬기 옵션 (설정 화면에서 바꾼다) */
