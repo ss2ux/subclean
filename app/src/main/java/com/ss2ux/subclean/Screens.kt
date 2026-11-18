@@ -229,17 +229,7 @@ private fun CleanScreen(vm: AppViewModel) {
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
-                val sub = vm.fileName
-                val audio = vm.currentAudioName
-                if (sub != null) {
-                    Text(
-                        if (audio != null) "$sub + $audio" else sub,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        fontSize = 12.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
+                // 부제는 미니플레이어에서 트랙명/파일명 토글로 보여 줌
             }
         }
 
@@ -391,8 +381,13 @@ private fun CleanScreen(vm: AppViewModel) {
                         ListScrollbar(listState)
                     }
                 }
-                // 미니플레이어
-                MiniPlayerBar(player, audioName = vm.currentAudioName)
+                // 미니플레이어 (트랙명·큐 이동 포함)
+                MiniPlayerBar(
+                    player = player,
+                    audioFileName = vm.currentAudioName,
+                    trackTitle = vm.currentTrackTitle,
+                    onPlayCue = { n -> vm.playCue(n) }
+                )
             } else {
                 Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
                     Text("다듬는 중...")
@@ -695,42 +690,92 @@ private fun RowCard(row: PreviewRow, playing: Boolean = false, onClick: () -> Un
 }
 
 @Composable
-private fun MiniPlayerBar(player: AudioPlayer, audioName: String?) {
-    if (audioName == null && player.durationMs == 0L && player.error == null) return
+private fun MiniPlayerBar(
+    player: AudioPlayer,
+    audioFileName: String?,
+    trackTitle: String?,
+    onPlayCue: (Int) -> Unit
+) {
+    if (audioFileName == null && player.durationMs == 0L && player.error == null) return
+    var showFileName by remember(audioFileName, trackTitle) { mutableStateOf(false) }
+    var cueInput by remember { mutableStateOf("") }
+    val displayTitle = when {
+        !showFileName && !trackTitle.isNullOrBlank() -> trackTitle
+        else -> audioFileName ?: "오디오 없음"
+    }
+    val canToggle = !trackTitle.isNullOrBlank() && !audioFileName.isNullOrBlank()
+
     Card(
-        Modifier.fillMaxWidth().padding(vertical = 6.dp),
+        Modifier.fillMaxWidth().padding(vertical = 4.dp),
         colors = androidx.compose.material3.CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surfaceVariant
         )
     ) {
-        Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+        Column(Modifier.padding(horizontal = 10.dp, vertical = 6.dp)) {
+            // 제목(트랙명 기본, 탭 시 파일명) + 재생 버튼
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    audioName ?: "오디오 없음",
-                    fontSize = 13.sp,
+                    displayTitle,
+                    fontSize = 12.sp,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f)
+                    modifier = Modifier
+                        .weight(1f)
+                        .let { m ->
+                            if (canToggle) m.clickable { showFileName = !showFileName } else m
+                        }
                 )
-                TextButton(onClick = { player.togglePlayPause() }, enabled = player.durationMs > 0) {
-                    Text(if (player.isPlaying) "일시정지" else "재생")
+                TextButton(
+                    onClick = { player.togglePlayPause() },
+                    enabled = player.durationMs > 0,
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+                ) {
+                    Text(if (player.isPlaying) "일시정지" else "재생", fontSize = 12.sp)
                 }
             }
+            if (canToggle) {
+                Text(
+                    if (showFileName) "탭 → 트랙명" else "탭 → 파일명",
+                    fontSize = 10.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
             if (player.error != null) {
-                Text(player.error!!, fontSize = 12.sp, color = MaterialTheme.colorScheme.error)
+                Text(player.error!!, fontSize = 11.sp, color = MaterialTheme.colorScheme.error)
             }
             if (player.durationMs > 0) {
                 val progress = (player.positionMs.toFloat() / player.durationMs).coerceIn(0f, 1f)
                 Slider(
                     value = progress,
                     onValueChange = { player.seekTo((it * player.durationMs).toLong()) },
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier.fillMaxWidth().height(20.dp)
                 )
                 Text(
                     "${Doc.formatMs(player.positionMs)} / ${Doc.formatMs(player.durationMs)}",
-                    fontSize = 11.sp,
+                    fontSize = 10.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+            }
+            // 사용자 지정 큐 번호 → 해당 타임스탬프로 이동·재생
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.padding(top = 2.dp)
+            ) {
+                OutlinedTextField(
+                    value = cueInput,
+                    onValueChange = { v -> cueInput = v.filter { it.isDigit() }.take(6) },
+                    label = { Text("Cue", fontSize = 11.sp) },
+                    singleLine = true,
+                    modifier = Modifier.width(88.dp).height(56.dp)
+                )
+                Spacer(Modifier.width(8.dp))
+                TextButton(
+                    onClick = {
+                        val n = cueInput.toIntOrNull()
+                        if (n != null) onPlayCue(n)
+                    },
+                    enabled = cueInput.toIntOrNull() != null
+                ) { Text("이동·재생", fontSize = 12.sp) }
             }
         }
     }

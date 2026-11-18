@@ -135,6 +135,9 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
     /** 현재 자막에 짝이 되는 오디오 파일 이름 (없으면 null) */
     var currentAudioName by mutableStateOf<String?>(null)
         private set
+    /** mp3 메타데이터의 트랙 제목 (없으면 null). 표시용 */
+    var currentTrackTitle by mutableStateOf<String?>(null)
+        private set
     val audioPlayer = AudioPlayer(app)
 
     // 분할 탭 (5천자 넘는 텍스트를 DeepL 에 나눠 넣기). 탭을 옮겨도 남도록 여기에 둔다
@@ -329,6 +332,29 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
     }
 
     /**
+     * 큐 번호(1부터)로 이동해 재생.
+     * SRT 번호 줄이 있으면 그 번호, 없으면 타임스탬프 등장 순서.
+     */
+    fun playCue(cueNumber: Int) {
+        if (cueNumber < 1) {
+            message = "큐 번호는 1 이상이어야 해요"
+            return
+        }
+        val lines = doc?.lines ?: run {
+            message = "열린 자막이 없어요"
+            return
+        }
+        val idx = lines.indexOfFirst { it.cueNumber == cueNumber && it.startMs != null }
+        if (idx < 0) {
+            val maxCue = lines.mapNotNull { it.cueNumber }.maxOrNull()
+            message = if (maxCue != null) "큐 $cueNumber 을(를) 찾지 못했어요 (1~$maxCue)"
+            else "이 파일에 큐 번호가 없어요"
+            return
+        }
+        playLine(idx)
+    }
+
+    /**
      * 폴더(디렉터리)를 열어 자막 파일 목록과 같은 이름 줄기(basename)의 오디오를 짝지운다.
      * 첫 번째 자막을 바로 연다.
      */
@@ -423,9 +449,36 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         queueIndex = index
         val item = items[index]
         currentAudioName = item.audioName
+        currentTrackTitle = null
         audioPlayer.pause()
         audioPlayer.load(item.audioUri)
+        // mp3 메타데이터에서 트랙 제목 읽기
+        if (item.audioUri != null) {
+            viewModelScope.launch(Dispatchers.IO) {
+                val title = readAudioTitle(item.audioUri)
+                withContext(Dispatchers.Main) {
+                    // 아직 같은 트랙일 때만 반영
+                    if (currentAudioName == item.audioName) currentTrackTitle = title
+                }
+            }
+        }
         openFile(item.subUri)
+    }
+
+    private fun readAudioTitle(uri: Uri): String? {
+        return try {
+            val r = android.media.MediaMetadataRetriever()
+            try {
+                r.setDataSource(app, uri)
+                r.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_TITLE)
+                    ?.trim()
+                    ?.takeIf { it.isNotEmpty() }
+            } finally {
+                try { r.release() } catch (_: Exception) {}
+            }
+        } catch (_: Exception) {
+            null
+        }
     }
 
     /** 저장·작업 완료 후 다음 자막으로. 마지막이면 false */
@@ -557,7 +610,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
             )
             withContext(Dispatchers.Main) {
                 val restoredLines = dc.lines.mapIndexed { i, ln ->
-                    Line(ln.prefix, newBodies[i], ln.eol, ln.editable, ln.startMs)
+                    Line(ln.prefix, newBodies[i], ln.eol, ln.editable, ln.startMs, ln.cueNumber)
                 }
                 doc = Doc(dc.kind, restoredLines)
                 preview = p

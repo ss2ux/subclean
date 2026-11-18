@@ -9,13 +9,15 @@ enum class Kind(val label: String) { SRT("SRT"), VTT("VTT"), LRC("LRC"), TXT("TX
  *  - eol      : 원래 줄바꿈 문자 (\r\n, \n, \r, 마지막 줄이면 "")
  *  - editable : false 면 번호/타임스탬프/빈 줄/헤더 등이라 절대 건드리지 않는다
  *  - startMs  : 이 줄(큐)의 시작 시각(ms). 오디오 시크용. 없으면 null
+ *  - cueNumber: 1부터 시작하는 큐 번호 (타임스탬프 블록 단위). 없으면 null
  */
 class Line(
     val prefix: String,
     val body: String,
     val eol: String,
     val editable: Boolean,
-    val startMs: Long? = null
+    val startMs: Long? = null,
+    val cueNumber: Int? = null
 )
 
 /** 파일 전체를 "줄 단위 + 줄바꿈 그대로" 로 들고 있어서, 본문만 바꿔도 나머지는 한 글자도 달라지지 않는다 */
@@ -113,41 +115,66 @@ class Doc(val kind: Kind, val lines: List<Line>) {
 
             val lines = ArrayList<Line>(raw.size)
             when (kind) {
-                Kind.TXT -> for ((t, eol) in raw) lines.add(Line("", t, eol, t.isNotBlank(), null))
-                Kind.LRC -> for ((t, eol) in raw) {
-                    val m = LRC_LINE.matchEntire(t)
-                    if (m != null && m.groupValues[2].isNotBlank()) {
-                        val prefix = m.groupValues[1]
-                        lines.add(Line(prefix, m.groupValues[2], eol, true, parseLrcStartMs(prefix)))
-                    } else {
-                        lines.add(Line("", t, eol, false, null))   // [ti:..] [ar:..] 같은 정보 줄, 빈 줄
+                Kind.TXT -> for ((t, eol) in raw) lines.add(Line("", t, eol, t.isNotBlank(), null, null))
+                Kind.LRC -> {
+                    var cueNo = 0
+                    for ((t, eol) in raw) {
+                        val m = LRC_LINE.matchEntire(t)
+                        if (m != null && m.groupValues[2].isNotBlank()) {
+                            val prefix = m.groupValues[1]
+                            cueNo++
+                            lines.add(Line(prefix, m.groupValues[2], eol, true, parseLrcStartMs(prefix), cueNo))
+                        } else {
+                            lines.add(Line("", t, eol, false, null, null))   // [ti:..] [ar:..] 같은 정보 줄, 빈 줄
+                        }
                     }
                 }
                 Kind.SRT, Kind.VTT -> {
                     var inCue = false
                     var inNote = false
                     var cueStartMs: Long? = null
+                    var cueNo = 0
+                    var currentCueNo: Int? = null
+                    // SRT 번호 줄(순수 숫자)이 있으면 그 값을 쓰고, 없으면 타임스탬프 등장 순서로 1,2,3…
+                    val pureNumber = Regex("""^\s*\d+\s*$""")
+                    var pendingSrtNumber: Int? = null
                     for ((t, eol) in raw) {
                         var editable = false
                         var startMs: Long? = null
+                        var thisCue: Int? = null
                         if (t.isBlank()) {
                             inCue = false
                             inNote = false
                             cueStartMs = null
+                            currentCueNo = null
+                            pendingSrtNumber = null
                         } else if (inNote) {
                             // VTT NOTE / STYLE / REGION 블록 안
                         } else if (inCue) {
                             editable = true
                             startMs = cueStartMs
+                            thisCue = currentCueNo
                         } else if (TIMING.matches(t)) {
                             inCue = true
                             cueStartMs = parseClockToMs(t)
+                            val n = pendingSrtNumber
+                            if (n != null) {
+                                currentCueNo = n
+                                if (n > cueNo) cueNo = n
+                            } else {
+                                cueNo++
+                                currentCueNo = cueNo
+                            }
+                            pendingSrtNumber = null
+                            thisCue = currentCueNo
                         } else if (kind == Kind.VTT &&
                             (t.startsWith("NOTE") || t.startsWith("STYLE") || t.startsWith("REGION"))
                         ) {
                             inNote = true
+                        } else if (pureNumber.matches(t)) {
+                            pendingSrtNumber = t.trim().toIntOrNull()
                         }
-                        lines.add(Line("", t, eol, editable, startMs))
+                        lines.add(Line("", t, eol, editable, startMs, thisCue))
                     }
                 }
             }
