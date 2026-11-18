@@ -351,24 +351,33 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
                     }
                     return@launch
                 }
+                // 자막: srt/vtt/lrc/txt 모두 큐에 넣고 오디오와 짝짓는다
                 val subExt = setOf("srt", "vtt", "lrc", "txt")
                 val audioExt = setOf("mp3", "m4a", "flac", "wav", "ogg", "aac", "opus")
                 val children = tree.listFiles().filter { it.isFile && it.name != null }
                 val subs = children.filter { it.name!!.substringAfterLast('.', "").lowercase() in subExt }
                     .sortedBy { it.name!!.lowercase() }
                 val audios = children.filter { it.name!!.substringAfterLast('.', "").lowercase() in audioExt }
-                // 일반: song.vtt ↔ song.mp3 (확장자만 제거한 줄기)
-                // 호환: song.mp3.vtt ↔ song.mp3  (자막 이름에 오디오 확장자가 끼어 있는 경우)
+                // 짝 예시
+                //   song.vtt / song.txt / song.srt     ↔ song.mp3
+                //   song.mp3.vtt / song.mp3.txt        ↔ song.mp3
                 fun stem(name: String) = name.substringBeforeLast('.').lowercase()
                 fun subMatchKeys(name: String): List<String> {
-                    val base = stem(name) // song  또는  song.mp3
-                    val keys = linkedSetOf(base)
-                    for (ext in audioExt) {
-                        val suffix = ".$ext"
-                        if (base.endsWith(suffix)) {
-                            // song.mp3.vtt → base=song.mp3 → 추가로 song, song.mp3(파일명) 후보
-                            keys.add(base.removeSuffix(suffix))
-                            keys.add(base) // 오디오 파일명이 정확히 song.mp3 인 경우
+                    val lower = name.lowercase()
+                    val keys = linkedSetOf<String>()
+                    // 1) 마지막 확장자만 제거: song.txt → song, song.mp3.txt → song.mp3
+                    if ('.' !in lower) return listOf(lower)
+                    var cur = lower.substringBeforeLast('.')
+                    keys.add(cur)
+                    // 2) 이름 안에 오디오 확장자가 끼어 있으면 벗겨 가며 후보 추가
+                    //    song.mp3.txt → song.mp3(파일명), song(줄기)
+                    while ('.' in cur) {
+                        val ext = cur.substringAfterLast('.')
+                        if (ext in audioExt) {
+                            keys.add(cur) // 정확히 song.mp3 인 오디오
+                            cur = cur.substringBeforeLast('.')
+                            keys.add(cur)
+                        } else {
                             break
                         }
                     }
@@ -381,7 +390,6 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
                     val audio = keys.firstNotNullOfOrNull { k ->
                         audioByStem[k]?.firstOrNull()
                             ?: audioByFullName[k]
-                            ?: audioByFullName["$k.mp3"]
                             ?: audioExt.firstNotNullOfOrNull { ext -> audioByFullName["$k.$ext"] }
                     }
                     QueueItem(sub.name!!, sub.uri, audio?.uri, audio?.name)
