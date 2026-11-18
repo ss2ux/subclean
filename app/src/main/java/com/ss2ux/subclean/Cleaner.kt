@@ -53,9 +53,15 @@ class Cleaner(rules: List<Rule>, private val opt: CleanOptions) {
     /** 잘못된 정규식 규칙 등 사용자가 고쳐야 할 문제 */
     val problems = ArrayList<String>()
 
+    /** 바꿀 말이 있는 일반 치환 (삭제 제외) */
     private val plainMap = HashMap<String, String>()
     private val plainIds = HashMap<String, Long>()   // 일반 규칙 찾을 말 -> 규칙 id (점검 기록용)
     private var plainRegex: Regex? = null
+    /**
+     * 삭제 규칙 (바꿀 말 비움). 정규식 일괄 치환 대신 String.replace 로 직접 지운다.
+     * 긴 문자열부터 적용. Pair(찾을말, 규칙id)
+     */
+    private val deleteRules = ArrayList<Pair<String, Long>>()
     private val regexRules = ArrayList<Triple<Rule, Regex, String>>()
     private val brokenRules = HashSet<Long>()
 
@@ -73,6 +79,7 @@ class Cleaner(rules: List<Rule>, private val opt: CleanOptions) {
 
     init {
         // 1) 치환·삭제 규칙 먼저 등록 (바꿀 말이 비어 있으면 삭제)
+        val deleteMap = LinkedHashMap<String, Long>() // 같은 찾을 말은 나중에 등록된 id 유지
         for (r in rules) {
             if (!r.enabled || r.find.isEmpty()) continue
             val find = norm(r.find)
@@ -84,19 +91,29 @@ class Cleaner(rules: List<Rule>, private val opt: CleanOptions) {
                 } catch (e: Exception) {
                     problems.add("정규식 오류: ${r.find}")
                 }
+            } else if (repl.isEmpty()) {
+                // 삭제: String.replace 경로 (Telegram@xxx 처럼 기호가 있어도 안전)
+                deleteMap[find] = r.id
             } else if (find != repl) {
-                // 찾을 말 → 바꿀 말. 바꿀 말이 "" 이면 해당 문자열 삭제
-                plainMap[find] = repl      // 같은 찾을 말이 여러 번 있으면 아래 줄이 이긴다
+                plainMap[find] = repl
                 plainIds[find] = r.id
             }
         }
-        if (plainMap.isNotEmpty()) {
-            val alt = plainMap.keys.sortedByDescending { it.length }.joinToString("|") { esc(it) }
-            plainRegex = Regex(alt)
+        // 긴 것부터 지워야 짧은 조각이 먼저 먹히지 않음
+        for ((k, id) in deleteMap.entries.sortedByDescending { it.key.length }) {
+            deleteRules.add(k to id)
+            // plainMap 에도 "" 로 넣어 두면 점검/표시와 일치
+            plainMap[k] = ""
+            plainIds[k] = id
         }
-        // 2) 제외 단어: 삭제 규칙(빈 바꿀 말)과 완전히 같은 말은 보호하지 않음
-        //    (보호하면 삭제 규칙이 영원히 안 먹음)
-        val deleteExact = plainMap.filter { it.value.isEmpty() }.keys
+        if (plainMap.any { it.value.isNotEmpty() }) {
+            val alt = plainMap.filter { it.value.isNotEmpty() }.keys
+                .sortedByDescending { it.length }
+                .joinToString("|") { esc(it) }
+            if (alt.isNotEmpty()) plainRegex = Regex(alt)
+        }
+        // 2) 제외 단어: 삭제 규칙과 완전히 같은 말은 보호하지 않음
+        val deleteExact = deleteMap.keys
         protectRe = opt.protect.map { norm(it) }.filter { it.isNotEmpty() }.distinct()
             .filter { it !in deleteExact }
             .sortedByDescending { it.length }
@@ -104,8 +121,19 @@ class Cleaner(rules: List<Rule>, private val opt: CleanOptions) {
             ?.let { w -> Regex(w.joinToString("|") { esc(it) }) }
     }
 
-    private fun norm(s: String): String =
-        if (opt.normalize) Normalizer.normalize(s, Normalizer.Form.NFC) else s
+    private fun norm(s: String): String {
+        // 전각 영숫자·기호(＠ 등) → 반각, NFC 정규화
+        val sb = StringBuilder(s.length)
+        for (ch in s) {
+            when {
+                ch in '\uFF01'..'\uFF5E' -> sb.append((ch.code - 0xFEE0).toChar())
+                ch == '\u3000' -> sb.append(' ')
+                else -> sb.append(ch)
+            }
+        }
+        val folded = sb.toString()
+        return if (opt.normalize) Normalizer.normalize(folded, Normalizer.Form.NFC) else folded
+    }
 
     private fun esc(s: String): String {
         val meta = "\\^\$.|?*+()[]{}"
@@ -176,6 +204,16 @@ class Cleaner(rules: List<Rule>, private val opt: CleanOptions) {
         do {
             val prev = s
             val fired = if (trace != null) ArrayList<Long>() else null
+            // 삭제 규칙: 문자열 직접 치환 (정규식 메타/엔진 이슈 회피)
+            if (deleteRules.isNotEmpty()) {
+                for ((find, id) in deleteRules) {
+                    if (find.isEmpty()) continue
+                    if (s.contains(find)) {
+                        s = s.replace(find, "")
+                        fired?.add(id)
+                    }
+                }
+            }
             plainRegex?.let { re -> s = replacePlain(s, re, fired) }
             for ((rule, re, repl) in regexRules) {
                 if (rule.id in brokenRules) continue
