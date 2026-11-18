@@ -173,6 +173,12 @@ class Doc(val kind: Kind, val lines: List<Line>) {
                             inNote = true
                         } else if (pureNumber.matches(t)) {
                             pendingSrtNumber = t.trim().toIntOrNull()
+                        } else if (kind == Kind.VTT && t.startsWith("WEBVTT")) {
+                            // 헤더 — 수정하지 않음
+                        } else {
+                            // 타임스탬프에 묶이지 않은 고아 본문(파일 맨 끝 크레딧·연락처 등)
+                            // 예: 마지막에 홀로 있는 Telegram@xxx → 다듬기·삭제 대상
+                            editable = true
                         }
                         lines.add(Line("", t, eol, editable, startMs, thisCue))
                     }
