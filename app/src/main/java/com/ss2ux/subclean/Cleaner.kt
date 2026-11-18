@@ -66,19 +66,18 @@ class Cleaner(rules: List<Rule>, private val opt: CleanOptions) {
     private val wordRe = Regex("(?<!\\S)(\\S+)(?:[ \\t\\u3000]+\\1){${n - 1},}(?!\\S)")
     private val unitRe = Regex("([^\\p{Nd}\\s]{2,4}?)\\1{${n - 1},}")
 
-    // 제외 단어: 치환 전에 칸막이 글자(사용자 지정 영역 문자)로 바꿔 두었다가 마지막에 되돌린다
-    private val protectRe: Regex? = opt.protect.map { norm(it) }.filter { it.isNotEmpty() }.distinct()
-        .sortedByDescending { it.length }
-        .takeIf { it.isNotEmpty() }
-        ?.let { w -> Regex(w.joinToString("|") { esc(it) }) }
+    // 제외 단어용 (init 에서 삭제 규칙과 겹치면 제외 목록에서 뺌 — 삭제 규칙이 우선)
+    private var protectRe: Regex? = null
     private val PUA = 0xE000
     private val PUA_MAX = 6000
 
     init {
+        // 1) 치환·삭제 규칙 먼저 등록 (바꿀 말이 비어 있으면 삭제)
         for (r in rules) {
             if (!r.enabled || r.find.isEmpty()) continue
             val find = norm(r.find)
-            val repl = norm(r.replace)
+            // 공백만 있는 바꿀 말도 삭제로 본다
+            val repl = norm(r.replace.trim())
             if (r.regex) {
                 try {
                     regexRules.add(Triple(r, Regex(HangulClass.expand(find)), repl))
@@ -86,6 +85,7 @@ class Cleaner(rules: List<Rule>, private val opt: CleanOptions) {
                     problems.add("정규식 오류: ${r.find}")
                 }
             } else if (find != repl) {
+                // 찾을 말 → 바꿀 말. 바꿀 말이 "" 이면 해당 문자열 삭제
                 plainMap[find] = repl      // 같은 찾을 말이 여러 번 있으면 아래 줄이 이긴다
                 plainIds[find] = r.id
             }
@@ -94,6 +94,14 @@ class Cleaner(rules: List<Rule>, private val opt: CleanOptions) {
             val alt = plainMap.keys.sortedByDescending { it.length }.joinToString("|") { esc(it) }
             plainRegex = Regex(alt)
         }
+        // 2) 제외 단어: 삭제 규칙(빈 바꿀 말)과 완전히 같은 말은 보호하지 않음
+        //    (보호하면 삭제 규칙이 영원히 안 먹음)
+        val deleteExact = plainMap.filter { it.value.isEmpty() }.keys
+        protectRe = opt.protect.map { norm(it) }.filter { it.isNotEmpty() }.distinct()
+            .filter { it !in deleteExact }
+            .sortedByDescending { it.length }
+            .takeIf { it.isNotEmpty() }
+            ?.let { w -> Regex(w.joinToString("|") { esc(it) }) }
     }
 
     private fun norm(s: String): String =
@@ -116,7 +124,8 @@ class Cleaner(rules: List<Rule>, private val opt: CleanOptions) {
         while (true) {
             val m = re.find(s, pos) ?: break
             sb.append(s, pos, m.range.first)
-            val repl = plainMap[m.value] ?: m.value
+            // containsKey 로 조회: 바꿀 말이 ""(삭제) 인 경우에도 올바르게 적용
+            val repl = if (plainMap.containsKey(m.value)) plainMap[m.value]!! else m.value
             if (fired != null) plainIds[m.value]?.let { fired.add(it) }
             sb.append(repl)
             var next = m.range.last + 1

@@ -902,12 +902,14 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
     }
 
     fun addRule(find: String, replace: String, regex: Boolean, speech: Speech = Speech.ALL, polish: Boolean = false, tab: String = "") {
+        // 바꿀 말 앞뒤 공백 제거. 비우거나 공백만이면 "" → 삭제 규칙
+        val repl = replace.trim()
         // 찾을 말·바꿀 말·정규식 여부·말투가 전부 같은 규칙은 다시 등록하지 않는다
-        if (rules.any { RuleStore.sameRule(it, find, replace, regex, speech) }) {
+        if (rules.any { RuleStore.sameRule(it, find, repl, regex, speech) }) {
             message = "똑같은 규칙이 이미 있어요"
             return
         }
-        commitRules(rules + Rule(nextId(), find, replace, regex, true, speech, polish, tab))
+        commitRules(rules + Rule(nextId(), find, repl, regex, true, speech, polish, tab))
         if (tab.isNotEmpty() && tab !in ruleTabs) saveTabs(ruleTabs + tab)
     }
 
@@ -959,12 +961,13 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
     }
 
     fun updateRule(r: Rule) {
-        if (rules.any { it.id != r.id && RuleStore.sameRule(it, r.find, r.replace, r.regex, r.speech) }) {
+        val fixed = r.copy(replace = r.replace.trim()) // 공백만 있으면 삭제 규칙
+        if (rules.any { it.id != fixed.id && RuleStore.sameRule(it, fixed.find, fixed.replace, fixed.regex, fixed.speech) }) {
             message = "똑같은 규칙이 이미 있어요"
             return
         }
-        commitRules(rules.map { if (it.id == r.id) r else it })
-        if (r.tab.isNotEmpty() && r.tab !in ruleTabs) saveTabs(ruleTabs + r.tab)
+        commitRules(rules.map { if (it.id == fixed.id) fixed else it })
+        if (fixed.tab.isNotEmpty() && fixed.tab !in ruleTabs) saveTabs(ruleTabs + fixed.tab)
     }
 
     fun deleteRule(id: Long) {
