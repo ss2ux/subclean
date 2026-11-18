@@ -161,9 +161,10 @@ class Cleaner(rules: List<Rule>, private val opt: CleanOptions) {
 
         // 제외 단어 보호 (줄에 원래 칸막이 글자가 있으면 보호하지 않는다)
         var saved: ArrayList<String>? = null
-        if (protectRe != null && s.none { it.code in PUA..(PUA + PUA_MAX) }) {
+        val protect = protectRe
+        if (protect != null && s.none { it.code in PUA..(PUA + PUA_MAX) }) {
             val list = ArrayList<String>()
-            s = protectRe.replace(s) { m ->
+            s = protect.replace(s) { m ->
                 if (list.size >= PUA_MAX) m.value
                 else { list.add(m.value); (PUA + list.size - 1).toChar().toString() }
             }
