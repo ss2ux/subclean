@@ -17,10 +17,24 @@ import kotlinx.coroutines.withContext
 import java.nio.charset.Charset
 
 /** 미리보기 한 줄: 다듬기 대상 줄의 전/후 */
-class PreviewRow(val index: Int, val before: String, val after: String, val excluded: Boolean = false) {
+class PreviewRow(
+    val index: Int,
+    val before: String,
+    val after: String,
+    val excluded: Boolean = false,
+    val startMs: Long? = null
+) {
     /** 실제로 바뀌는 줄인가 (사용자가 제외한 줄은 바뀌지 않는 것으로 친다) */
     val changed: Boolean get() = !excluded && before != after
 }
+
+/** 폴더에서 찾은 자막(+짝 오디오) 한 항목 */
+data class QueueItem(
+    val name: String,
+    val subUri: Uri,
+    val audioUri: Uri?,
+    val audioName: String? = null
+)
 
 class Preview(
     val newBodies: List<String>,   // 모든 줄의 새 본문 (편집 대상이 아닌 줄은 원래 그대로)
@@ -107,6 +121,21 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
     // 사용자가 "이 줄은 바꾸지 않기"로 뺀 줄 번호들 (파일을 새로 열거나 다시 읽으면 비워진다)
     var excluded by mutableStateOf<Set<Int>>(emptySet())
         private set
+
+    // ---- 폴더 큐 + 미니플레이어 ----
+    /** 폴더 열기로 모은 자막 목록 (이름 순). 비어 있으면 단일 파일 모드 */
+    var queue by mutableStateOf<List<QueueItem>>(emptyList())
+        private set
+    var queueIndex by mutableIntStateOf(-1)
+        private set
+    var folderName by mutableStateOf<String?>(null)
+        private set
+    var folderUri by mutableStateOf<Uri?>(null)
+        private set
+    /** 현재 자막에 짝이 되는 오디오 파일 이름 (없으면 null) */
+    var currentAudioName by mutableStateOf<String?>(null)
+        private set
+    val audioPlayer = AudioPlayer(app)
 
     // 분할 탭 (5천자 넘는 텍스트를 DeepL 에 나눠 넣기). 탭을 옮겨도 남도록 여기에 둔다
     var splitText by mutableStateOf("")
@@ -285,6 +314,138 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         recompute()
     }
 
+    /** 해당 줄의 시작 시각으로 오디오 재생 (미니플레이어) */
+    fun playLine(index: Int) {
+        val ms = doc?.lines?.getOrNull(index)?.startMs
+        if (ms == null) {
+            message = "이 줄에 타임스탬프가 없어요"
+            return
+        }
+        if (currentAudioName == null && audioPlayer.durationMs == 0L) {
+            message = "짝이 되는 mp3가 없어요. 폴더 열기로 자막·오디오를 함께 불러오세요"
+            return
+        }
+        audioPlayer.playFrom(ms, index)
+    }
+
+    /**
+     * 폴더(디렉터리)를 열어 자막 파일 목록과 같은 이름 줄기(basename)의 오디오를 짝지운다.
+     * 첫 번째 자막을 바로 연다.
+     */
+    fun openFolder(treeUri: Uri) {
+        busy = true
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                try {
+                    app.contentResolver.takePersistableUriPermission(
+                        treeUri,
+                        Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                    )
+                } catch (_: Exception) {
+                }
+                val tree = androidx.documentfile.provider.DocumentFile.fromTreeUri(app, treeUri)
+                if (tree == null || !tree.isDirectory) {
+                    withContext(Dispatchers.Main) {
+                        message = "폴더를 열 수 없어요"
+                        busy = false
+                    }
+                    return@launch
+                }
+                val subExt = setOf("srt", "vtt", "lrc", "txt")
+                val audioExt = setOf("mp3", "m4a", "flac", "wav", "ogg", "aac", "opus")
+                val children = tree.listFiles().filter { it.isFile && it.name != null }
+                val subs = children.filter { it.name!!.substringAfterLast('.', "").lowercase() in subExt }
+                    .sortedBy { it.name!!.lowercase() }
+                val audios = children.filter { it.name!!.substringAfterLast('.', "").lowercase() in audioExt }
+                // 일반: song.vtt ↔ song.mp3 (확장자만 제거한 줄기)
+                // 호환: song.mp3.vtt ↔ song.mp3  (자막 이름에 오디오 확장자가 끼어 있는 경우)
+                fun stem(name: String) = name.substringBeforeLast('.').lowercase()
+                fun subMatchKeys(name: String): List<String> {
+                    val base = stem(name) // song  또는  song.mp3
+                    val keys = linkedSetOf(base)
+                    for (ext in audioExt) {
+                        val suffix = ".$ext"
+                        if (base.endsWith(suffix)) {
+                            // song.mp3.vtt → base=song.mp3 → 추가로 song, song.mp3(파일명) 후보
+                            keys.add(base.removeSuffix(suffix))
+                            keys.add(base) // 오디오 파일명이 정확히 song.mp3 인 경우
+                            break
+                        }
+                    }
+                    return keys.toList()
+                }
+                val audioByStem = audios.groupBy { stem(it.name!!) }
+                val audioByFullName = audios.associateBy { it.name!!.lowercase() }
+                val items = subs.map { sub ->
+                    val keys = subMatchKeys(sub.name!!)
+                    val audio = keys.firstNotNullOfOrNull { k ->
+                        audioByStem[k]?.firstOrNull()
+                            ?: audioByFullName[k]
+                            ?: audioByFullName["$k.mp3"]
+                            ?: audioExt.firstNotNullOfOrNull { ext -> audioByFullName["$k.$ext"] }
+                    }
+                    QueueItem(sub.name!!, sub.uri, audio?.uri, audio?.name)
+                }
+                withContext(Dispatchers.Main) {
+                    folderUri = treeUri
+                    folderName = tree.name ?: "폴더"
+                    queue = items
+                    queueIndex = -1
+                    if (items.isEmpty()) {
+                        message = "이 폴더에 자막 파일(.srt .vtt .lrc .txt)이 없어요"
+                        busy = false
+                    } else {
+                        message = "자막 ${items.size}개 · 오디오 짝 ${items.count { it.audioUri != null }}개"
+                        openQueueItem(0)
+                    }
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    message = "폴더 열기 실패: ${e.message ?: e}"
+                    busy = false
+                }
+            }
+        }
+    }
+
+    /** 큐에서 n번째 자막을 연다 (0-based). 짝 오디오도 미니플레이어에 올린다. */
+    fun openQueueItem(index: Int) {
+        val items = queue
+        if (index !in items.indices) return
+        queueIndex = index
+        val item = items[index]
+        currentAudioName = item.audioName
+        audioPlayer.pause()
+        audioPlayer.load(item.audioUri)
+        openFile(item.subUri)
+    }
+
+    /** 저장·작업 완료 후 다음 자막으로. 마지막이면 false */
+    fun openNextInQueue(): Boolean {
+        val next = queueIndex + 1
+        if (next !in queue.indices) {
+            message = "마지막 자막이에요"
+            return false
+        }
+        openQueueItem(next)
+        return true
+    }
+
+    fun openPrevInQueue(): Boolean {
+        val prev = queueIndex - 1
+        if (prev !in queue.indices) return false
+        openQueueItem(prev)
+        return true
+    }
+
+    val hasNextInQueue: Boolean get() = queue.isNotEmpty() && queueIndex in 0 until queue.lastIndex
+    val hasPrevInQueue: Boolean get() = queue.isNotEmpty() && queueIndex > 0
+
+    override fun onCleared() {
+        audioPlayer.release()
+        super.onCleared()
+    }
+
     /** 열어 둔 파일을 다시 읽는다 (다른 앱에서 고치고 돌아왔을 때). 수동으로 고른 인코딩은 유지한다.
      *  DeepL로 보낸 뒤 돌아온 경우에는 한글이 바뀌었는지 검사해서 복원 확인 창을 띄운다. */
     fun reloadFile(onDone: () -> Unit = {}) {
@@ -376,7 +537,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
                     total += ln.prefix.length + finalBody.length + ln.eol.length
                     dialogue += finalBody.length
                     dialogueLines++
-                    rows.add(PreviewRow(i, body, after, skip))
+                    rows.add(PreviewRow(i, body, after, skip, ln.startMs))
                     if (skip) excludedCount++ else if (after != body) changed++
                 }
             }
@@ -388,7 +549,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
             )
             withContext(Dispatchers.Main) {
                 val restoredLines = dc.lines.mapIndexed { i, ln ->
-                    Line(ln.prefix, newBodies[i], ln.eol, ln.editable)
+                    Line(ln.prefix, newBodies[i], ln.eol, ln.editable, ln.startMs)
                 }
                 doc = Doc(dc.kind, restoredLines)
                 preview = p
@@ -441,7 +602,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
                     total += ln.prefix.length + finalBody.length + ln.eol.length
                     dialogue += finalBody.length
                     dialogueLines++
-                    rows.add(PreviewRow(i, ln.body, after, skip))
+                    rows.add(PreviewRow(i, ln.body, after, skip, ln.startMs))
                     if (skip) excludedCount++ else if (after != ln.body) changed++
                 }
             }
@@ -457,9 +618,15 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
 
     // ---------------- 저장 ----------------
 
+    /** 덮어쓰기 성공 후 폴더 큐의 다음 자막을 연다 */
+    fun saveThenNext() {
+        save(null, overwrite = true, openNextAfter = true)
+    }
+
     /** overwrite = true 면 열었던 원본 파일에 덮어쓰고, false 면 target 에 새로 저장.
-     *  성공 시 결과를 클립보드와 분할 입력칸에 넣는다. 치환 연쇄(A→B→C)는 Cleaner 가 한 번에 처리한다. */
-    fun save(target: Uri?, overwrite: Boolean) {
+     *  성공 시 결과를 클립보드와 분할 입력칸에 넣는다. 치환 연쇄(A→B→C)는 Cleaner 가 한 번에 처리한다.
+     *  openNextAfter = true 이면 덮어쓰기 성공 후 큐의 다음 자막으로 넘어간다. */
+    fun save(target: Uri?, overwrite: Boolean, openNextAfter: Boolean = false) {
         val d = decoded ?: return
         val dc = doc ?: return
         val p = preview ?: return
@@ -524,6 +691,10 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
                     reparse()
                 }
                 busy = false
+                // 덮어쓰기 성공 후 다음 자막으로 (폴더 작업 흐름)
+                if (openNextAfter && savedText != null) {
+                    openNextInQueue()
+                }
             }
         }
     }

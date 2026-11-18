@@ -171,6 +171,12 @@ private fun CleanScreen(vm: AppViewModel) {
     ) { uri ->
         if (uri != null) vm.openFile(uri)
     }
+    // 폴더 열기: 자막 + 같은 이름 줄기 mp3 를 미리 짝지움
+    val folderLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocumentTree()
+    ) { uri ->
+        if (uri != null) vm.openFolder(uri)
+    }
     val saveAsLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("application/octet-stream")
     ) { uri ->
@@ -180,6 +186,10 @@ private fun CleanScreen(vm: AppViewModel) {
     val openDeepL = rememberDeepLOpener { vm.message = it }
     var onlyChanged by rememberSaveable { mutableStateOf(true) }
     var confirmOverwrite by remember { mutableStateOf(false) }
+    // 3번 연속 탭으로 제외: 같은 줄·짧은 간격 안에서만 카운트
+    var tapCount by remember { mutableIntStateOf(0) }
+    var lastTapIndex by remember { mutableIntStateOf(-1) }
+    var lastTapAt by remember { mutableStateOf(0L) }
     val pullState = rememberPullToRefreshState()
     if (pullState.isRefreshing) {
         LaunchedEffect(true) { vm.reloadFile { pullState.endRefresh() } }
@@ -188,38 +198,42 @@ private fun CleanScreen(vm: AppViewModel) {
     val doc = vm.doc
     val dec = vm.decoded
     val pv = vm.preview
+    val player = vm.audioPlayer
 
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
         Spacer(Modifier.height(12.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
             Button(
-                onClick = { openLauncher.launch(arrayOf("*/*")) },
+                onClick = { folderLauncher.launch(null) },
                 enabled = !vm.busy
             ) {
                 Icon(Icons.Default.FolderOpen, contentDescription = null)
                 Spacer(Modifier.width(8.dp))
-                Text("파일 열기")
+                Text("폴더 열기")
+            }
+            Spacer(Modifier.width(8.dp))
+            OutlinedButton(
+                onClick = { openLauncher.launch(arrayOf("*/*")) },
+                enabled = !vm.busy
+            ) {
+                Text("파일")
             }
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
                 Text(
-                    vm.fileName ?: "자막 파일(.srt .vtt .lrc .txt)을 열어 주세요",
+                    when {
+                        vm.folderName != null && vm.queue.isNotEmpty() ->
+                            "${vm.folderName} · ${vm.queueIndex + 1}/${vm.queue.size}"
+                        else -> vm.fileName ?: "폴더를 열어 자막·mp3를 함께 불러 주세요"
+                    },
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
-                // 최근 연 파일 위치 안내 (지금 연 파일과 다를 때만)
-                val last = vm.lastOpenName
-                if (last != null && last != vm.fileName) {
+                val sub = vm.fileName
+                val audio = vm.currentAudioName
+                if (sub != null) {
                     Text(
-                        "최근: $last",
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        fontSize = 12.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                } else if (last != null && vm.fileName == null) {
-                    Text(
-                        "최근: $last 위치에서 열어요",
+                        if (audio != null) "$sub + $audio" else sub,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                         fontSize = 12.sp,
@@ -269,6 +283,30 @@ private fun CleanScreen(vm: AppViewModel) {
                         enabled = !vm.busy && pv.changedCount > 0,
                         modifier = Modifier.weight(1f)
                     ) { Text("원본에 덮어쓰기") }
+                }
+                // 폴더 큐: 이전 / 완료 후 다음 자막
+                if (vm.queue.isNotEmpty()) {
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedButton(
+                            onClick = { vm.openPrevInQueue() },
+                            enabled = !vm.busy && vm.hasPrevInQueue,
+                            modifier = Modifier.weight(1f)
+                        ) { Text("이전 자막") }
+                        Button(
+                            onClick = {
+                                // 변경이 남아 있으면 덮어쓰기 확인 후 다음으로 넘기는 흐름은 사용자에게 맡김
+                                // 여기서는 현재 상태를 저장하지 않고 다음으로만 이동
+                                if (!vm.openNextInQueue()) {
+                                    // 마지막
+                                }
+                            },
+                            enabled = !vm.busy && vm.hasNextInQueue,
+                            modifier = Modifier.weight(1f)
+                        ) { Text("다음 자막 (${vm.queueIndex + 2}/${vm.queue.size})") }
+                    }
                 }
                 Row(
                     Modifier.fillMaxWidth(),
@@ -323,12 +361,38 @@ private fun CleanScreen(vm: AppViewModel) {
                                     }
                                 }
                             } else {
-                                items(shown, key = { it.index }) { row -> RowCard(row) { vm.toggleExclude(row.index) } }
+                                items(shown, key = { it.index }) { row ->
+                                    RowCard(
+                                        row = row,
+                                        playing = player.playingLineIndex == row.index && player.isPlaying,
+                                        onClick = {
+                                            val now = System.currentTimeMillis()
+                                            if (row.index == lastTapIndex && now - lastTapAt < 900) {
+                                                tapCount++
+                                            } else {
+                                                tapCount = 1
+                                            }
+                                            lastTapIndex = row.index
+                                            lastTapAt = now
+                                            // 한 번(및 두 번) 탭: 해당 타임스탬프 재생
+                                            if (row.startMs != null) {
+                                                vm.playLine(row.index)
+                                            }
+                                            // 세 번 연속 탭: 제외/포함 토글
+                                            if (tapCount >= 3) {
+                                                vm.toggleExclude(row.index)
+                                                tapCount = 0
+                                            }
+                                        }
+                                    )
+                                }
                             }
                         }
                         ListScrollbar(listState)
                     }
                 }
+                // 미니플레이어
+                MiniPlayerBar(player, audioName = vm.currentAudioName)
             } else {
                 Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
                     Text("다듬는 중...")
@@ -337,7 +401,8 @@ private fun CleanScreen(vm: AppViewModel) {
         } else {
             Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
                 Text(
-                    "규칙 탭에서 치환 목록을 만들고,\n파일을 열어 바뀌는 모습을 확인한 뒤 저장하세요.",
+                    "규칙 탭에서 치환 목록을 만들고,\n‘폴더 열기’로 자막·mp3를 함께 불러 작업하세요.\n" +
+                        "줄 한 번 탭 → 해당 구간 재생 · 세 번 탭 → 제외",
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
@@ -352,12 +417,25 @@ private fun CleanScreen(vm: AppViewModel) {
         AlertDialog(
             onDismissRequest = { confirmOverwrite = false },
             title = { Text("원본에 덮어쓸까요?") },
-            text = { Text("원본 파일이 다듬은 내용으로 바뀌고 되돌릴 수 없어요. 안전하게 하려면 '다른 이름으로 저장'을 쓰세요.") },
+            text = {
+                Text(
+                    "원본 파일이 다듬은 내용으로 바뀌고 되돌릴 수 없어요. 안전하게 하려면 '다른 이름으로 저장'을 쓰세요." +
+                        if (vm.hasNextInQueue) "\n\n‘덮어쓰고 다음’을 누르면 저장 후 폴더의 다음 자막으로 넘어가요." else ""
+                )
+            },
             confirmButton = {
-                TextButton(onClick = {
-                    confirmOverwrite = false
-                    vm.save(null, true)
-                }) { Text("덮어쓰기") }
+                Row {
+                    if (vm.hasNextInQueue) {
+                        TextButton(onClick = {
+                            confirmOverwrite = false
+                            vm.saveThenNext()
+                        }) { Text("덮어쓰고 다음") }
+                    }
+                    TextButton(onClick = {
+                        confirmOverwrite = false
+                        vm.save(null, true)
+                    }) { Text("덮어쓰기") }
+                }
             },
             dismissButton = { TextButton(onClick = { confirmOverwrite = false }) { Text("취소") } }
         )
@@ -565,14 +643,33 @@ private fun EncodingRow(vm: AppViewModel, doc: Doc, dec: Decoded) {
 }
 
 @Composable
-private fun RowCard(row: PreviewRow, onToggle: () -> Unit) {
-    val tappable = row.changed || row.excluded
+private fun RowCard(row: PreviewRow, playing: Boolean = false, onClick: () -> Unit) {
+    // 타임스탬프가 있거나 바뀌는/제외된 줄은 탭 가능 (재생 + 3탭 제외)
+    val tappable = row.startMs != null || row.changed || row.excluded
     Card(
-        Modifier.fillMaxWidth().padding(vertical = 4.dp).let { if (tappable) it.clickable(onClick = onToggle) else it }
+        Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp)
+            .let { if (tappable) it.clickable(onClick = onClick) else it },
+        colors = if (playing) {
+            androidx.compose.material3.CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.primaryContainer
+            )
+        } else {
+            androidx.compose.material3.CardDefaults.cardColors()
+        }
     ) {
         Column(Modifier.padding(12.dp)) {
+            val timeLabel = row.startMs?.let { " · ${Doc.formatMs(it)}" }.orEmpty()
+            val actionHint = when {
+                row.excluded -> " · 제외됨 (세 번 탭 → 다시 포함)"
+                row.changed && row.startMs != null -> " · 탭→재생 · 세 번→제외"
+                row.changed -> " · 세 번 탭 → 제외"
+                row.startMs != null -> " · 탭 → 재생"
+                else -> ""
+            }
             Text(
-                "줄 ${row.index + 1}" + (if (row.excluded) " · 바꾸지 않음 (누르면 다시 포함)" else if (row.changed) " · 누르면 제외" else ""),
+                "줄 ${row.index + 1}$timeLabel$actionHint" + if (playing) " · 재생 중" else "",
                 fontSize = 11.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -592,6 +689,48 @@ private fun RowCard(row: PreviewRow, onToggle: () -> Unit) {
                 Text(row.after.ifEmpty { "(빈 줄)" }, color = MaterialTheme.colorScheme.primary)
             } else {
                 Text(row.before)
+            }
+        }
+    }
+}
+
+@Composable
+private fun MiniPlayerBar(player: AudioPlayer, audioName: String?) {
+    if (audioName == null && player.durationMs == 0L && player.error == null) return
+    Card(
+        Modifier.fillMaxWidth().padding(vertical = 6.dp),
+        colors = androidx.compose.material3.CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant
+        )
+    ) {
+        Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    audioName ?: "오디오 없음",
+                    fontSize = 13.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+                TextButton(onClick = { player.togglePlayPause() }, enabled = player.durationMs > 0) {
+                    Text(if (player.isPlaying) "일시정지" else "재생")
+                }
+            }
+            if (player.error != null) {
+                Text(player.error!!, fontSize = 12.sp, color = MaterialTheme.colorScheme.error)
+            }
+            if (player.durationMs > 0) {
+                val progress = (player.positionMs.toFloat() / player.durationMs).coerceIn(0f, 1f)
+                Slider(
+                    value = progress,
+                    onValueChange = { player.seekTo((it * player.durationMs).toLong()) },
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Text(
+                    "${Doc.formatMs(player.positionMs)} / ${Doc.formatMs(player.durationMs)}",
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
         }
     }
