@@ -22,11 +22,20 @@ class PreviewRow(
     val before: String,
     val after: String,
     val excluded: Boolean = false,
-    val cueNo: Int? = null      // SRT/VTT 의 Cue 번호 (LRC·TXT 는 null)
+    val startMs: Long? = null,
+    val cueNumber: Int? = null   // 자막(Cue) 번호. SRT/VTT 만 있고 LRC·TXT 는 null
 ) {
     /** 실제로 바뀌는 줄인가 (사용자가 제외한 줄은 바뀌지 않는 것으로 친다) */
     val changed: Boolean get() = !excluded && before != after
 }
+
+/** 폴더에서 찾은 자막(+짝 오디오) 한 항목 */
+data class QueueItem(
+    val name: String,
+    val subUri: Uri,
+    val audioUri: Uri?,
+    val audioName: String? = null
+)
 
 class Preview(
     val newBodies: List<String>,   // 모든 줄의 새 본문 (편집 대상이 아닌 줄은 원래 그대로)
@@ -44,6 +53,13 @@ const val SPEECH_PACK_VERSION = 3   // 2: 높임 '너 -> 당신' 규칙 추가, 
 /** 원본 백업을 못 해서 덮어쓰기를 멈출 때 */
 private class BackupFailed(message: String) : Exception(message)
 
+/** 규칙 탭의 기본 칩 이름. 사용자 탭은 이 이름과 같게 만들 수 없다 */
+val BUILTIN_TAB_NAMES = setOf("전체", "공통", "높임1", "높임2", "반말", "정규식만", "다듬기")
+
+/** 저장해 둔 탭 목록 + 규칙에 붙어 있는 탭 이름(가져오기 등으로 생긴 것)을 순서대로 합친다 */
+private fun mergeRuleTabs(saved: List<String>, rules: List<Rule>): List<String> =
+    (saved + rules.map { it.tab }.filter { it.isNotEmpty() }).distinct()
+
 class AppViewModel(private val app: Application) : AndroidViewModel(app) {
     private val ruleStore = RuleStore(app)
     private val settingsStore = SettingsStore(app)
@@ -53,6 +69,10 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
     var rules by mutableStateOf(dedupedRules)
         private set
     var settings by mutableStateOf(settingsStore.load())
+        private set
+
+    // 규칙 탭에서 사용자가 만든 탭 이름들 (보기·분류 전용)
+    var ruleTabs by mutableStateOf(mergeRuleTabs(settingsStore.ruleTabs, dedupedRules))
         private set
 
     // 규칙 탭 정렬: 0 최신순, 1 오래된순, 2 찾을 말 가나다순 (보기 전용)
@@ -103,6 +123,24 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
     var excluded by mutableStateOf<Set<Int>>(emptySet())
         private set
 
+    // ---- 폴더 큐 + 미니플레이어 ----
+    /** 폴더 열기로 모은 자막 목록 (이름 순). 비어 있으면 단일 파일 모드 */
+    var queue by mutableStateOf<List<QueueItem>>(emptyList())
+        private set
+    var queueIndex by mutableIntStateOf(-1)
+        private set
+    var folderName by mutableStateOf<String?>(null)
+        private set
+    var folderUri by mutableStateOf<Uri?>(null)
+        private set
+    /** 현재 자막에 짝이 되는 오디오 파일 이름 (없으면 null) */
+    var currentAudioName by mutableStateOf<String?>(null)
+        private set
+    /** mp3 메타데이터의 트랙 제목 (없으면 null). 표시용 */
+    var currentTrackTitle by mutableStateOf<String?>(null)
+        private set
+    val audioPlayer = AudioPlayer(app)
+
     // 분할 탭 (5천자 넘는 텍스트를 DeepL 에 나눠 넣기). 탭을 옮겨도 남도록 여기에 둔다
     var splitText by mutableStateOf("")
         private set
@@ -120,8 +158,25 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
     // 사용자가 직접 고치거나 지우거나 파일·자막을 가져오면 false 가 되어, 파일이 바뀌어도 지우지 않는다
     private var splitAutoInserted = false
 
+    // ---- 규칙 충돌 점검 ----
+    // null = 아직 점검 안 함. 규칙·제외 단어를 바꾸면 checkStale 이 true 가 되어 '다시 점검' 안내를 띄운다
+    var ruleFindings by mutableStateOf<List<Finding>?>(null)
+        private set
+    var checkStale by mutableStateOf(false)
+        private set
+    var checking by mutableStateOf(false)
+        private set
+    private var checkJob: Job? = null
+
     var message by mutableStateOf<String?>(null)
     var busy by mutableStateOf(false)
+        private set
+
+    // ---- 1차 다듬기에서 생성된 한글 보호 (줄 단위) ----
+    /** 1차 다듬기 후 원본 덮어쓰기 때: 한글이 있던 줄 번호 + 그 줄의 한글 단어들 */
+    private var firstPassLineKoreans: List<FirstPassLineKorean>? = null
+    /** 새로고침 후 사라진 1차 한글 목록. null 이면 다이얼로그 없음 */
+    var pendingMissingKoreans by mutableStateOf<List<MissingKorean>?>(null)
         private set
 
     private var bytes: ByteArray? = null
@@ -169,7 +224,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
     }
 
     /** 지금 미리보기 결과 전체 텍스트를 만들어 [onReady] 로 준다 (메인 스레드에서 불림). DeepL 로 보내기 전 복사용.
-     *  복사하는 글이므로 분할 입력칸에도 같이 넣는다 */
+     *  복사하는 글이므로 분할 입력칸에도 같이 넣는다. */
     fun withResultText(onReady: (String) -> Unit) {
         val dc = doc ?: return
         val p = preview ?: return
@@ -216,6 +271,9 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
                         fileUri = uri
                         fileName = name
                         forcedCharset = null
+                        // 새 파일이면 1차 한글 기억·차이 목록을 초기화
+                        firstPassLineKoreans = null
+                        pendingMissingKoreans = null
                         // 다음에 파일 선택기를 열 때 이 위치부터 보이도록 기억
                         lastOpenUri = uri
                         lastOpenName = name
@@ -248,7 +306,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         recompute()
     }
 
-    /** 다듬기 탭에서 줄을 두 번 누르면: 바뀌는 줄은 제외(원래대로 둠), 이미 제외한 줄은 다시 포함 */
+    /** 다듬기 탭에서 줄을 누르면: 바뀌는 줄은 제외(원래대로 둠), 이미 제외한 줄은 다시 포함 */
     fun toggleExclude(index: Int) {
         excluded = if (index in excluded) excluded - index else excluded + index
         recompute()
@@ -260,7 +318,198 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         recompute()
     }
 
-    /** 열어 둔 파일을 다시 읽는다 (다른 앱에서 고치고 돌아왔을 때). 수동으로 고른 인코딩은 유지한다 */
+    /** 해당 줄의 시작 시각으로 오디오 재생 (미니플레이어) */
+    fun playLine(index: Int) {
+        val ms = doc?.lines?.getOrNull(index)?.startMs
+        if (ms == null) {
+            message = "이 줄에 타임스탬프가 없어요"
+            return
+        }
+        if (currentAudioName == null && audioPlayer.durationMs == 0L) {
+            message = "짝이 되는 mp3가 없어요. 폴더 열기로 자막·오디오를 함께 불러오세요"
+            return
+        }
+        audioPlayer.playFrom(ms, index)
+    }
+
+    /**
+     * 큐 번호(1부터)로 이동해 재생.
+     * SRT 번호 줄이 있으면 그 번호, 없으면 타임스탬프 등장 순서.
+     */
+    fun playCue(cueNumber: Int) {
+        if (cueNumber < 1) {
+            message = "큐 번호는 1 이상이어야 해요"
+            return
+        }
+        val lines = doc?.lines ?: run {
+            message = "열린 자막이 없어요"
+            return
+        }
+        val idx = lines.indexOfFirst { it.cueNumber == cueNumber && it.startMs != null }
+        if (idx < 0) {
+            val maxCue = lines.mapNotNull { it.cueNumber }.maxOrNull()
+            message = if (maxCue != null) "큐 $cueNumber 을(를) 찾지 못했어요 (1~$maxCue)"
+            else "이 파일에 큐 번호가 없어요"
+            return
+        }
+        playLine(idx)
+    }
+
+    /**
+     * 폴더(디렉터리)를 열어 자막 파일 목록과 같은 이름 줄기(basename)의 오디오를 짝지운다.
+     * 첫 번째 자막을 바로 연다.
+     */
+    fun openFolder(treeUri: Uri) {
+        busy = true
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                try {
+                    app.contentResolver.takePersistableUriPermission(
+                        treeUri,
+                        Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                    )
+                } catch (_: Exception) {
+                }
+                val tree = androidx.documentfile.provider.DocumentFile.fromTreeUri(app, treeUri)
+                if (tree == null || !tree.isDirectory) {
+                    withContext(Dispatchers.Main) {
+                        message = "폴더를 열 수 없어요"
+                        busy = false
+                    }
+                    return@launch
+                }
+                // 자막: srt/vtt/lrc/txt 모두 큐에 넣고 오디오와 짝짓는다
+                val subExt = setOf("srt", "vtt", "lrc", "txt")
+                val audioExt = setOf("mp3", "m4a", "flac", "wav", "ogg", "aac", "opus")
+                val children = tree.listFiles().filter { it.isFile && it.name != null }
+                val subs = children.filter { it.name!!.substringAfterLast('.', "").lowercase() in subExt }
+                    .sortedBy { it.name!!.lowercase() }
+                val audios = children.filter { it.name!!.substringAfterLast('.', "").lowercase() in audioExt }
+                // 짝 예시
+                //   song.vtt / song.txt / song.srt     ↔ song.mp3
+                //   song.mp3.vtt / song.mp3.txt        ↔ song.mp3
+                fun stem(name: String) = name.substringBeforeLast('.').lowercase()
+                fun subMatchKeys(name: String): List<String> {
+                    val lower = name.lowercase()
+                    val keys = linkedSetOf<String>()
+                    // 1) 마지막 확장자만 제거: song.txt → song, song.mp3.txt → song.mp3
+                    if ('.' !in lower) return listOf(lower)
+                    var cur = lower.substringBeforeLast('.')
+                    keys.add(cur)
+                    // 2) 이름 안에 오디오 확장자가 끼어 있으면 벗겨 가며 후보 추가
+                    //    song.mp3.txt → song.mp3(파일명), song(줄기)
+                    while ('.' in cur) {
+                        val ext = cur.substringAfterLast('.')
+                        if (ext in audioExt) {
+                            keys.add(cur) // 정확히 song.mp3 인 오디오
+                            cur = cur.substringBeforeLast('.')
+                            keys.add(cur)
+                        } else {
+                            break
+                        }
+                    }
+                    return keys.toList()
+                }
+                val audioByStem = audios.groupBy { stem(it.name!!) }
+                val audioByFullName = audios.associateBy { it.name!!.lowercase() }
+                val items = subs.map { sub ->
+                    val keys = subMatchKeys(sub.name!!)
+                    val audio = keys.firstNotNullOfOrNull { k ->
+                        audioByStem[k]?.firstOrNull()
+                            ?: audioByFullName[k]
+                            ?: audioExt.firstNotNullOfOrNull { ext -> audioByFullName["$k.$ext"] }
+                    }
+                    QueueItem(sub.name!!, sub.uri, audio?.uri, audio?.name)
+                }
+                withContext(Dispatchers.Main) {
+                    folderUri = treeUri
+                    folderName = tree.name ?: "폴더"
+                    queue = items
+                    queueIndex = -1
+                    if (items.isEmpty()) {
+                        message = "이 폴더에 자막 파일(.srt .vtt .lrc .txt)이 없어요"
+                        busy = false
+                    } else {
+                        message = "자막 ${items.size}개 · 오디오 짝 ${items.count { it.audioUri != null }}개"
+                        openQueueItem(0)
+                    }
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    message = "폴더 열기 실패: ${e.message ?: e}"
+                    busy = false
+                }
+            }
+        }
+    }
+
+    /** 큐에서 n번째 자막을 연다 (0-based). 짝 오디오도 미니플레이어에 올린다. */
+    fun openQueueItem(index: Int) {
+        val items = queue
+        if (index !in items.indices) return
+        queueIndex = index
+        val item = items[index]
+        currentAudioName = item.audioName
+        currentTrackTitle = null
+        audioPlayer.pause()
+        audioPlayer.load(item.audioUri)
+        // mp3 메타데이터에서 트랙 제목 읽기
+        if (item.audioUri != null) {
+            viewModelScope.launch(Dispatchers.IO) {
+                val title = readAudioTitle(item.audioUri)
+                withContext(Dispatchers.Main) {
+                    // 아직 같은 트랙일 때만 반영
+                    if (currentAudioName == item.audioName) currentTrackTitle = title
+                }
+            }
+        }
+        openFile(item.subUri)
+    }
+
+    private fun readAudioTitle(uri: Uri): String? {
+        return try {
+            val r = android.media.MediaMetadataRetriever()
+            try {
+                r.setDataSource(app, uri)
+                r.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_TITLE)
+                    ?.trim()
+                    ?.takeIf { it.isNotEmpty() }
+            } finally {
+                try { r.release() } catch (_: Exception) {}
+            }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    /** 저장·작업 완료 후 다음 자막으로. 마지막이면 false */
+    fun openNextInQueue(): Boolean {
+        val next = queueIndex + 1
+        if (next !in queue.indices) {
+            message = "마지막 자막이에요"
+            return false
+        }
+        openQueueItem(next)
+        return true
+    }
+
+    fun openPrevInQueue(): Boolean {
+        val prev = queueIndex - 1
+        if (prev !in queue.indices) return false
+        openQueueItem(prev)
+        return true
+    }
+
+    val hasNextInQueue: Boolean get() = queue.isNotEmpty() && queueIndex in 0 until queue.lastIndex
+    val hasPrevInQueue: Boolean get() = queue.isNotEmpty() && queueIndex > 0
+
+    override fun onCleared() {
+        audioPlayer.release()
+        super.onCleared()
+    }
+
+    /** 열어 둔 파일을 다시 읽는다 (다른 앱에서 고치고 돌아왔을 때). 수동으로 고른 인코딩은 유지한다.
+     *  DeepL로 보낸 뒤 돌아온 경우에는 한글이 바뀌었는지 검사해서 복원 확인 창을 띄운다. */
     fun reloadFile(onDone: () -> Unit = {}) {
         val uri = fileUri
         if (uri == null) {
@@ -283,11 +532,99 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
                     bytes = data
                     reparse()
                     msg = "다시 불러왔어요"
+                    // DeepL 보내기 때 기억해 둔 한글이 있으면 차이 검사
+                    checkKoreanAfterReload()
                 }
                 message = msg
                 onDone()
             }
         }
+    }
+
+    /** 새로고침 직후: 1차 때 한글이 있던 줄에서 그 단어가 사라졌는지 검사.
+     *  다듬기 모드가 꺼져 있으면 줄 변경 확인을 하지 않는다. */
+    private fun checkKoreanAfterReload() {
+        if (!settings.polishMode) {
+            firstPassLineKoreans = null
+            pendingMissingKoreans = null
+            return
+        }
+        val firstPass = firstPassLineKoreans ?: return
+        if (firstPass.isEmpty()) return
+        val dc = doc ?: return
+        val currentBodies = dc.lines.mapIndexed { i, ln -> i to ln.body }.toMap()
+        val missing = findMissingKoreans(firstPass, currentBodies, settings.polishExclude)
+        pendingMissingKoreans = if (missing.isNotEmpty()) missing else null
+    }
+
+    /**
+     * 사용자가 고른 항목을 반영한다.
+     * replacements: MissingKorean.id → 그 줄에 넣을 최종 본문 문자열
+     * (같은 줄에 여러 단어가 있으면 UI에서 줄 단위로 합쳐서 넘겨준다)
+     */
+    fun applyMissingKoreanFixes(lineReplacements: Map<Int, String>) {
+        val dc = doc
+        if (dc == null || lineReplacements.isEmpty()) {
+            pendingMissingKoreans = null
+            return
+        }
+        val newBodies = dc.lines.mapIndexed { i, ln ->
+            if (ln.editable && i in lineReplacements) lineReplacements[i]!! else ln.body
+        }
+        viewModelScope.launch(Dispatchers.Default) {
+            val s = settings
+            // 다듬기 전용(polish) 규칙은 한글 복구 예시 추천에만 쓰고, 실제 다듬기에는 넣지 않는다
+            val r = rules.filter { !it.polish && (it.speech == Speech.ALL || it.speech == s.speech) }
+            val cleaner = Cleaner(r, s)
+            val commonCleaner = if (s.speech == Speech.ALL) cleaner else Cleaner(r.filter { it.speech == Speech.ALL }, s)
+            val monologue = Regex("\\.\\.|…")
+            val bodies = ArrayList<String>(dc.lines.size)
+            val rows = ArrayList<PreviewRow>()
+            var changed = 0
+            var excludedCount = 0
+            var total = 0
+            var dialogue = 0
+            var dialogueLines = 0
+            val ex = excluded
+            for ((i, ln) in dc.lines.withIndex()) {
+                val body = newBodies[i]
+                if (!ln.editable) {
+                    bodies.add(body)
+                    total += ln.prefix.length + body.length + ln.eol.length
+                } else {
+                    val after = (if (monologue.containsMatchIn(body)) commonCleaner else cleaner).clean(body)
+                    val skip = i in ex && after != body
+                    val finalBody = if (skip) body else after
+                    bodies.add(finalBody)
+                    total += ln.prefix.length + finalBody.length + ln.eol.length
+                    dialogue += finalBody.length
+                    dialogueLines++
+                    rows.add(PreviewRow(i, body, after, skip, ln.startMs, ln.cueNumber))
+                    if (skip) excludedCount++ else if (after != body) changed++
+                }
+            }
+            val p = Preview(
+                bodies, rows, changed, excludedCount,
+                (cleaner.problems + commonCleaner.problems).distinct(),
+                totalChars = total,
+                dialogueChars = dialogue + (dialogueLines - 1).coerceAtLeast(0)
+            )
+            withContext(Dispatchers.Main) {
+                val restoredLines = dc.lines.mapIndexed { i, ln ->
+                    Line(ln.prefix, newBodies[i], ln.eol, ln.editable, ln.startMs, ln.cueNumber)
+                }
+                doc = Doc(dc.kind, restoredLines)
+                preview = p
+                pendingMissingKoreans = null
+                firstPassLineKoreans = null
+                message = "선택한 ${lineReplacements.size}개 줄을 수정했어요"
+            }
+        }
+    }
+
+    fun dismissMissingKoreans() {
+        pendingMissingKoreans = null
+        firstPassLineKoreans = null
     }
 
     // ---------------- 다듬기 미리보기 ----------------
@@ -300,8 +637,8 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         }
         val s = settings
         val ex = excluded
-        // 공통 규칙 + 지금 고른 말투의 규칙만 쓴다 (저장 순서는 그대로 유지: 정규식은 순서대로 적용되므로)
-        val r = rules.filter { it.speech == Speech.ALL || it.speech == s.speech }
+        // 공통 규칙 + 지금 고른 말투의 규칙만 쓴다. 다듬기 전용(polish)은 한글 복구 예시용이라 제외
+        val r = rules.filter { !it.polish && (it.speech == Speech.ALL || it.speech == s.speech) }
         job?.cancel()
         job = viewModelScope.launch(Dispatchers.Default) {
             val cleaner = Cleaner(r, s)
@@ -327,7 +664,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
                     total += ln.prefix.length + finalBody.length + ln.eol.length
                     dialogue += finalBody.length
                     dialogueLines++
-                    rows.add(PreviewRow(i, ln.body, after, skip, d.cueNos.getOrNull(i)))
+                    rows.add(PreviewRow(i, ln.body, after, skip, ln.startMs, ln.cueNumber))
                     if (skip) excludedCount++ else if (after != ln.body) changed++
                 }
             }
@@ -343,9 +680,15 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
 
     // ---------------- 저장 ----------------
 
+    /** 덮어쓰기 성공 후 폴더 큐의 다음 자막을 연다 */
+    fun saveThenNext() {
+        save(null, overwrite = true, openNextAfter = true)
+    }
+
     /** overwrite = true 면 열었던 원본 파일에 덮어쓰고, false 면 target 에 새로 저장.
-     *  성공 시 결과를 클립보드와 분할 입력칸에 넣는다. 치환 연쇄(A→B→C)는 Cleaner 가 한 번에 처리한다. */
-    fun save(target: Uri?, overwrite: Boolean) {
+     *  성공 시 결과를 클립보드와 분할 입력칸에 넣는다. 치환 연쇄(A→B→C)는 Cleaner 가 한 번에 처리한다.
+     *  openNextAfter = true 이면 덮어쓰기 성공 후 큐의 다음 자막으로 넘어간다. */
+    fun save(target: Uri?, overwrite: Boolean, openNextAfter: Boolean = false) {
         val d = decoded ?: return
         val dc = doc ?: return
         val p = preview ?: return
@@ -389,6 +732,19 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
                 if (savedText != null) {
                     pendingClipboard = savedText
                     insertCopiedToSplit(savedText)   // 저장하면서 복사된 글도 분할 입력칸에 넣는다
+                    // 다듬기 모드 + 1차 다듬기 후 원본 덮어쓰기일 때만: 한글이 있는 줄을 기억한다
+                    if (settings.polishMode && overwrite && firstPassLineKoreans == null) {
+                        val list = ArrayList<FirstPassLineKorean>()
+                        for ((i, ln) in dc.lines.withIndex()) {
+                            if (!ln.editable) continue
+                            val body = p.newBodies[i]
+                            val words = extractHangulRuns(body)
+                            if (words.isNotEmpty()) {
+                                list.add(FirstPassLineKorean(i, words))
+                            }
+                        }
+                        firstPassLineKoreans = list
+                    }
                 }
                 message = if (savedText != null) "$msg · 분할 탭에도 넣었어요" else msg
                 if (overwrite && newBytes != null) {
@@ -397,6 +753,10 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
                     reparse()
                 }
                 busy = false
+                // 덮어쓰기 성공 후 다음 자막으로 (폴더 작업 흐름)
+                if (openNextAfter && savedText != null) {
+                    openNextInQueue()
+                }
             }
         }
     }
@@ -496,19 +856,62 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
 
     private fun commitRules(list: List<Rule>) {
         rules = list
+        checkStale = true
         viewModelScope.launch(Dispatchers.IO) { ruleStore.save(list) }
         recompute()
     }
 
     private fun nextId(): Long = (rules.maxOfOrNull { it.id } ?: 0L) + 1
 
-    fun addRule(find: String, replace: String, regex: Boolean, speech: Speech = Speech.ALL) {
+    private fun saveTabs(list: List<String>) {
+        ruleTabs = list
+        settingsStore.ruleTabs = list
+    }
+
+    /** 새 탭 이름에 문제가 있으면 이유를, 괜찮으면 null 을 돌려준다 */
+    fun checkTabName(raw: String): String? {
+        val n = raw.trim()
+        return when {
+            n.isEmpty() -> "탭 이름을 적어 주세요"
+            n.length > 20 -> "탭 이름은 20글자까지예요"
+            n.any { it == '\t' || it == '\n' || it == '\r' } -> "탭 이름에는 줄바꿈이나 탭 글자를 쓸 수 없어요"
+            n in BUILTIN_TAB_NAMES -> "기본 탭에 이미 있는 이름이에요"
+            n in ruleTabs -> "같은 이름의 탭이 이미 있어요"
+            else -> null
+        }
+    }
+
+    fun addRuleTab(raw: String): Boolean {
+        val err = checkTabName(raw)
+        if (err != null) {
+            message = err
+            return false
+        }
+        saveTabs(ruleTabs + raw.trim())
+        return true
+    }
+
+    /** 탭을 지운다. deleteRules = false 면 그 탭의 규칙은 남기고 탭 표시만 뺀다 */
+    fun removeRuleTab(name: String, deleteRules: Boolean = false) {
+        saveTabs(ruleTabs.filter { it != name })
+        if (rules.any { it.tab == name }) {
+            commitRules(
+                if (deleteRules) rules.filter { it.tab != name }
+                else rules.map { if (it.tab == name) it.copy(tab = "") else it }
+            )
+        }
+    }
+
+    fun addRule(find: String, replace: String, regex: Boolean, speech: Speech = Speech.ALL, polish: Boolean = false, tab: String = "") {
+        // 바꿀 말 앞뒤 공백 제거. 비우거나 공백만이면 "" → 삭제 규칙
+        val repl = replace.trim()
         // 찾을 말·바꿀 말·정규식 여부·말투가 전부 같은 규칙은 다시 등록하지 않는다
-        if (rules.any { RuleStore.sameRule(it, find, replace, regex, speech) }) {
+        if (rules.any { RuleStore.sameRule(it, find, repl, regex, speech) }) {
             message = "똑같은 규칙이 이미 있어요"
             return
         }
-        commitRules(rules + Rule(nextId(), find, replace, regex, true, speech))
+        commitRules(rules + Rule(nextId(), find, repl, regex, true, speech, polish, tab))
+        if (tab.isNotEmpty() && tab !in ruleTabs) saveTabs(ruleTabs + tab)
     }
 
     /**
@@ -559,11 +962,13 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
     }
 
     fun updateRule(r: Rule) {
-        if (rules.any { it.id != r.id && RuleStore.sameRule(it, r.find, r.replace, r.regex, r.speech) }) {
+        val fixed = r.copy(replace = r.replace.trim()) // 공백만 있으면 삭제 규칙
+        if (rules.any { it.id != fixed.id && RuleStore.sameRule(it, fixed.find, fixed.replace, fixed.regex, fixed.speech) }) {
             message = "똑같은 규칙이 이미 있어요"
             return
         }
-        commitRules(rules.map { if (it.id == r.id) r else it })
+        commitRules(rules.map { if (it.id == fixed.id) fixed else it })
+        if (fixed.tab.isNotEmpty() && fixed.tab !in ruleTabs) saveTabs(ruleTabs + fixed.tab)
     }
 
     fun deleteRule(id: Long) {
@@ -588,11 +993,20 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
                             list = list + r.copy(id = (list.maxOfOrNull { it.id } ?: 0L) + 1)
                             added++
                         } else {
-                            list = list.map { if (it.id == same.id) it.copy(replace = r.replace, enabled = r.enabled) else it }
+                            list = list.map {
+                                if (it.id == same.id) it.copy(
+                                    replace = r.replace,
+                                    enabled = r.enabled,
+                                    tab = if (r.tab.isNotEmpty()) r.tab else it.tab
+                                ) else it
+                            }
                             updated++
                         }
                     }
-                    commitRules(RuleStore.dedupe(list))
+                    val finalList = RuleStore.dedupe(list)
+                    commitRules(finalList)
+                    val mergedTabs = mergeRuleTabs(ruleTabs, finalList)
+                    if (mergedTabs != ruleTabs) saveTabs(mergedTabs)
                     message = "규칙 가져오기: ${added}개 추가, ${updated}개 갱신"
                 }
             } catch (e: Exception) {
@@ -619,8 +1033,66 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
     // ---------------- 설정 ----------------
 
     fun updateSettings(o: CleanOptions) {
+        if (o.protect != settings.protect) checkStale = true
         settings = o
         settingsStore.save(o)
         recompute()
     }
+
+    // ---------------- 규칙 충돌 점검 ----------------
+
+    /** 켜진 규칙 전부(말투별)와 제외 단어를 서로 맞춰 보고 결과를 ruleFindings 에 넣는다.
+     *  다듬기 전용(polish) 규칙은 실제 다듬기에 안 쓰이므로 점검에서도 제외한다. */
+    fun runRuleCheck() {
+        checkJob?.cancel()
+        checking = true
+        val rs = rules.filter { !it.polish }
+        val s = settings
+        checkJob = viewModelScope.launch(Dispatchers.Default) {
+            val res = try {
+                RuleCheck.check(rs, s)
+            } catch (e: Exception) {
+                emptyList()
+            }
+            withContext(Dispatchers.Main) {
+                ruleFindings = res
+                checkStale = false
+                checking = false
+            }
+        }
+    }
+
+    /**
+     * 규칙을 저장하기 전에, 이 규칙과 관련된 오류·경고만 빠르게 찾아 [onResult] 로 넘긴다.
+     * editId 가 null 이면 새 규칙. 참고 단계는 저장 때마다 띄우면 번거로워서 뺀다.
+     * 다듬기 전용으로 저장하는 경우는 실제 다듬기에 안 쓰이므로 점검을 건너뛴다.
+     */
+    fun precheckRule(
+        editId: Long?, find: String, replace: String, regex: Boolean, speech: Speech,
+        onResult: (List<Finding>) -> Unit
+    ) {
+        val id = editId ?: nextId()
+        val enabled = editId?.let { eid -> rules.firstOrNull { it.id == eid }?.enabled } ?: true
+        val cand = Rule(id, find, replace, regex, enabled, speech)
+        // 기존 규칙이 polish 이거나, 후보만 놓고 볼 때는 실제 다듬기 규칙끼리만 점검
+        val list = (if (editId == null) rules + cand else rules.map { if (it.id == editId) cand else it })
+            .filter { !it.polish }
+        val s = settings
+        viewModelScope.launch(Dispatchers.Default) {
+            val res = try {
+                RuleCheck.check(list, s, focusRule = id, includeInfo = false).filter { it.severity != Severity.INFO }
+            } catch (e: Exception) {
+                emptyList()
+            }
+            withContext(Dispatchers.Main) { onResult(res) }
+        }
+    }
+
+    /** 제외 단어를 넣기 전에: 이 단어가 가려서 안 먹게 되는 규칙을 찾는다 (가벼운 정적 검사라 바로 돌려준다) */
+    fun checkProtectWords(words: List<String>): List<Finding> =
+        try {
+            RuleCheck.checkProtectWords(rules.filter { !it.polish }, settings, words).filter { it.severity != Severity.INFO }
+        } catch (e: Exception) {
+            emptyList()
+        }
 }
