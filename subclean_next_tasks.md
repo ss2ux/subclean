@@ -1,12 +1,3 @@
-> **[최신 갱신 3] 규칙 탭 사용자 탭 추가** (`Rule.tab`, `SettingsStore.ruleTabs`, `AppViewModel.addRuleTab/removeRuleTab`, TSV 4번째 칸).
-> 탭은 보기·분류 전용(적용 방식 불변). 이름 규칙 파일은 `일본어이름_치환규칙.tsv` (`dev_tests/gen_names.py`). 화면 코드는 컴파일 못 해 봤으니 GitHub Actions 빌드로 확인할 것.
-
-> **[최신 갱신 2] 규칙 충돌 점검 추가됨** (`RuleCheck.kt`, `RuleCheckUi.kt`, `Cleaner.trace()`).
-> 규칙 탭 '규칙 점검' 버튼, 규칙 저장 전 경고창, 제외 단어 추가 전 경고창. 단독 테스트: `dev_tests/RuleCheckTest.kt`
-> (`kotlinc Cleaner.kt Josa.kt Speech.kt RuleCheck.kt RuleCheckTest.kt -include-runtime -d t.jar` 후 `java -jar t.jar ../app/src/main/res/raw/speech_pack.tsv`).
-> 화면 코드(RuleCheckUi.kt, Screens.kt 연결부)는 Android SDK 가 없어 컴파일 못 해 봤으니 GitHub Actions 빌드로 확인할 것.
-> 말투 팩 145개는 점검에서 오류/경고 0건이어야 한다 (팩을 고친 뒤에도 이 테스트로 확인).
-
 > **[최신 갱신] C 보완(프리셋 자동 설치), A(당겨서 새로고침), B(규칙 정렬 + 스크롤바), 높임 `너->당신` 모두 코드에 들어 있음.**
 > 남은 일은 GitHub Actions 빌드 결과 확인과, 사용자가 주는 어색한 문장 예시로 규칙 팩 보강뿐이다. 아래 A/B 설명은 구현 기록으로만 읽을 것.
 > 팩을 고칠 때는 `dev_tests/gen_pack.py` 를 고치고 `python3 gen_pack.py` 로 `speech_pack.tsv` 를 다시 만든 뒤 `res/raw/` 에 복사,

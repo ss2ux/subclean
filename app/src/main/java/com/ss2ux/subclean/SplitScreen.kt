@@ -157,7 +157,7 @@ fun SplitScreen(vm: AppViewModel) {
             if (next != null) {
                 Row(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(onClick = { copy(next) }, modifier = Modifier.weight(1f)) {
-                        Text("다음 조각 복사 ${next + 1}/${chunks.size}", maxLines = 1, softWrap = false)
+                        Text("다음 조각 복사 (${copied.size}/${chunks.size})", maxLines = 1, softWrap = false)
                     }
                     // 복사하고, 그 조각을 DeepL 앱으로 바로 보낸다 (복사가 먼저)
                     OutlinedButton(
