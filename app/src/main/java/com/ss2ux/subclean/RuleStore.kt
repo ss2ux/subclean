@@ -21,7 +21,9 @@ class RuleStore(context: Context) {
                     replace = o.optString("replace"),
                     regex = o.optBoolean("regex", false),
                     enabled = o.optBoolean("enabled", true),
-                    speech = Speech.fromName(o.optString("speech", "ALL"))   // 이전 버전 파일에는 없음 -> 공통
+                    speech = Speech.fromName(o.optString("speech", "ALL")),  // 이전 버전 파일에는 없음 -> 공통
+                    polish = o.optBoolean("polish", false),
+                    tab = o.optString("tab", "")  // 이전 버전 파일에는 없음 -> 탭 없음
                 )
             }
         } catch (e: Exception) {
@@ -40,6 +42,8 @@ class RuleStore(context: Context) {
                     .put("regex", r.regex)
                     .put("enabled", r.enabled)
                     .put("speech", r.speech.name)
+                    .put("polish", r.polish)
+                    .put("tab", r.tab)
             )
         }
         // 쓰다가 꺼져도 기존 파일이 깨지지 않게 임시 파일에 쓰고 바꿔치기
@@ -109,14 +113,15 @@ class RuleStore(context: Context) {
          *   찾을 말 <TAB> 바꿀 말 <TAB> 옵션
          * 옵션: R = 정규식,
          *       H1 = 높임1(화자 연상·청자 연하), H2 = 높임2(화자 연하·청자 연상),
-         *       H  = 예전 높임(→ 높임2로 읽음), C = 반말, - = 꺼짐.
-         *       겹치면 RH1, RH2-, RC 처럼 붙여 쓴다. H1/H2/C 가 없으면 공통.
+         *       H  = 예전 높임(→ 높임2로 읽음), C = 반말, P = 다듬기 전용, - = 꺼짐.
+         *       겹치면 RH1, RH2-, RC, P 처럼 붙여 쓴다. H1/H2/C 가 없으면 공통.
          *       줄바꿈/탭은 \n \t 로, 역슬래시는 \\ 로 적는다.
+         * 네 번째 열(선택): 규칙 탭 이름. 탭이 없는 규칙은 열을 생략한다.
          * # 로 시작하는 줄은 설명(무시)
          */
         fun toTsv(rules: List<Rule>): String {
             val sb = StringBuilder()
-            sb.append("# 자막 다듬기 치환 규칙: 찾을 말<TAB>바꿀 말<TAB>옵션(R=정규식, H1=높임1, H2=높임2, C=반말, -=꺼짐)\n")
+            sb.append("# 자막 다듬기 치환 규칙: 찾을 말<TAB>바꿀 말<TAB>옵션(R=정규식, H1=높임1, H2=높임2, C=반말, P=다듬기전용, -=꺼짐)<TAB>탭 이름(선택)\n")
             for (r in rules) {
                 val flags = (if (r.regex) "R" else "") +
                     (when (r.speech) {
@@ -125,9 +130,11 @@ class RuleStore(context: Context) {
                         Speech.CASUAL -> "C"
                         Speech.ALL -> ""
                     }) +
+                    (if (r.polish) "P" else "") +
                     (if (r.enabled) "" else "-")
                 sb.append(esc(r.find)).append('\t').append(esc(r.replace))
-                if (flags.isNotEmpty()) sb.append('\t').append(flags)
+                if (flags.isNotEmpty() || r.tab.isNotEmpty()) sb.append('\t').append(flags)
+                if (r.tab.isNotEmpty()) sb.append('\t').append(esc(r.tab))
                 sb.append('\n')
             }
             return sb.toString()
@@ -144,6 +151,7 @@ class RuleStore(context: Context) {
                 if (find.isEmpty()) continue
                 val repl = if (cols.size > 1) unesc(cols[1]) else ""
                 val flags = if (cols.size > 2) cols[2].trim().uppercase() else ""
+                val tab = if (cols.size > 3) unesc(cols[3]).trim() else ""
                 // H1 / H2 를 먼저 본 뒤, 예전 단독 H 는 높임2 로 취급
                 val speech = when {
                     "H1" in flags -> Speech.HONORIFIC1
@@ -152,7 +160,7 @@ class RuleStore(context: Context) {
                     'C' in flags -> Speech.CASUAL
                     else -> Speech.ALL
                 }
-                out.add(Rule(id++, find, repl, regex = 'R' in flags, enabled = '-' !in flags, speech = speech))
+                out.add(Rule(id++, find, repl, regex = 'R' in flags, enabled = '-' !in flags, speech = speech, polish = 'P' in flags, tab = tab))
             }
             return out
         }
@@ -174,6 +182,8 @@ class SettingsStore(context: Context) {
             compressUnits = p.getBoolean("compressUnits", d.compressUnits),
             fixJosa = p.getBoolean("fixJosa", d.fixJosa),
             protect = (p.getString("protect", "") ?: "").split('\n').filter { it.isNotBlank() },
+            polishMode = p.getBoolean("polishMode", d.polishMode),
+            polishExclude = (p.getString("polishExclude", "") ?: "").split('\n').filter { it.isNotBlank() },
             speech = Speech.fromName(p.getString("speech", d.speech.name))
         )
     }
@@ -182,6 +192,23 @@ class SettingsStore(context: Context) {
     var speechPackVersion: Int
         get() = p.getInt("speechPackVersion", 0)
         set(v) { p.edit().putInt("speechPackVersion", v).apply() }
+
+    /** 규칙 탭에서 사용자가 만든 탭 이름들 (순서 유지). JSON 배열 문자열로 저장 */
+    var ruleTabs: List<String>
+        get() {
+            val s = p.getString("ruleTabs", null) ?: return emptyList()
+            return try {
+                val arr = JSONArray(s)
+                List(arr.length()) { arr.optString(it, "") }.filter { it.isNotEmpty() }.distinct()
+            } catch (e: Exception) {
+                emptyList()
+            }
+        }
+        set(v) {
+            val arr = JSONArray()
+            v.forEach { arr.put(it) }
+            p.edit().putString("ruleTabs", arr.toString()).apply()
+        }
 
     /** 규칙 탭 정렬 (0 = 최신순, 1 = 오래된순, 2 = 찾을 말 가나다순). 보기 전용이라 저장 순서는 바뀌지 않는다 */
     var ruleSort: Int
@@ -223,6 +250,8 @@ class SettingsStore(context: Context) {
             .putBoolean("compressUnits", o.compressUnits)
             .putBoolean("fixJosa", o.fixJosa)
             .putString("protect", o.protect.joinToString("\n"))
+            .putBoolean("polishMode", o.polishMode)
+            .putString("polishExclude", o.polishExclude.joinToString("\n"))
             .putString("speech", o.speech.name)
             .apply()
     }
