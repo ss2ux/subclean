@@ -730,6 +730,64 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         save(null, overwrite = true, openNextAfter = true)
     }
 
+    /**
+     * 지금 연 자막을 외부 텍스트 편집기로 연다 (편집 모드).
+     * 시스템 앱 선택 창을 띄워 사용자가 연결 가능한 앱을 고르게 한다.
+     * 쓰기 권한을 함께 넘겨서 읽기 전용이 아니라 저장·수정이 가능하게 한다.
+     */
+    fun openSubtitleInEditor() {
+        val uri = fileUri
+        if (uri == null) {
+            message = "먼저 자막 파일을 열어 주세요"
+            return
+        }
+        val name = fileName ?: ""
+        val mime = when (name.substringAfterLast('.', "").lowercase()) {
+            "srt" -> "application/x-subrip"
+            "vtt" -> "text/vtt"
+            "lrc" -> "text/plain"
+            "txt" -> "text/plain"
+            else -> "text/plain"
+        }
+        try {
+            // 편집 모드: 읽기+쓰기 권한을 넘긴다. 일부 앱은 ACTION_EDIT 만, 일부는 VIEW 만 받으므로
+            // EDIT 를 우선으로 초안을 만들고, 받는 앱이 없으면 VIEW(쓰기 권한 포함)로 다시 시도한다.
+            val edit = Intent(Intent.ACTION_EDIT).apply {
+                setDataAndType(uri, mime)
+                addFlags(
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                        Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
+                        Intent.FLAG_ACTIVITY_NEW_TASK
+                )
+            }
+            val view = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, mime)
+                addFlags(
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                        Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
+                        Intent.FLAG_ACTIVITY_NEW_TASK
+                )
+            }
+            val pm = app.packageManager
+            val canEdit = edit.resolveActivity(pm) != null
+            val base = if (canEdit) edit else view
+            if (base.resolveActivity(pm) == null) {
+                message = "이 파일을 열 수 있는 앱이 없어요"
+                return
+            }
+            val chooser = Intent.createChooser(base, "자막 편집 앱 선택").apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                // 선택지에 VIEW 도 같이 넣고 싶을 때 (EDIT 가 있는 경우)
+                if (canEdit && view.resolveActivity(pm) != null) {
+                    putExtra(Intent.EXTRA_INITIAL_INTENTS, arrayOf(view))
+                }
+            }
+            app.startActivity(chooser)
+        } catch (e: Exception) {
+            message = "파일을 열지 못했어요: ${e.message ?: e}"
+        }
+    }
+
     /** overwrite = true 면 열었던 원본 파일에 덮어쓰고, false 면 target 에 새로 저장.
      *  성공 시 결과를 클립보드와 분할 입력칸에 넣는다. 치환 연쇄(A→B→C)는 Cleaner 가 한 번에 처리한다.
      *  openNextAfter = true 이면 덮어쓰기 성공 후 큐의 다음 자막으로 넘어간다. */
@@ -769,7 +827,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
             } catch (e: BackupFailed) {
                 msg = e.message ?: "원본 백업에 실패해서 덮어쓰지 않았어요"
             } catch (e: SecurityException) {
-                msg = "저장 권한이 없어요. '다른 이름으로 저장'을 써 주세요"
+                msg = "저장 권한이 없어요. 폴더 열기나 파일 열기로 쓰기 권한을 다시 받아 주세요"
             } catch (e: Exception) {
                 msg = "저장 실패: ${e.message ?: e}"
             }

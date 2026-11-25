@@ -177,11 +177,6 @@ private fun CleanScreen(vm: AppViewModel) {
     ) { uri ->
         if (uri != null) vm.openFolder(uri)
     }
-    val saveAsLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.CreateDocument("application/octet-stream")
-    ) { uri ->
-        if (uri != null) vm.save(uri, false)
-    }
     val clipboard = LocalClipboardManager.current
     val openDeepL = rememberDeepLOpener { vm.message = it }
     var onlyChanged by rememberSaveable { mutableStateOf(true) }
@@ -264,10 +259,10 @@ private fun CleanScreen(vm: AppViewModel) {
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     OutlinedButton(
-                        onClick = { saveAsLauncher.launch(suggestName(vm.fileName)) },
-                        enabled = !vm.busy,
+                        onClick = { vm.openSubtitleInEditor() },
+                        enabled = !vm.busy && vm.fileUri != null,
                         modifier = Modifier.weight(1f)
-                    ) { Text("다른 이름으로 저장") }
+                    ) { Text("자막 파일 열기") }
                     Button(
                         onClick = { confirmOverwrite = true },
                         enabled = !vm.busy && pv.changedCount > 0,
@@ -414,7 +409,7 @@ private fun CleanScreen(vm: AppViewModel) {
             title = { Text("원본에 덮어쓸까요?") },
             text = {
                 Text(
-                    "원본 파일이 다듬은 내용으로 바뀌고 되돌릴 수 없어요. 안전하게 하려면 '다른 이름으로 저장'을 쓰세요." +
+                    "원본 파일이 다듬은 내용으로 바뀌고 되돌릴 수 없어요. 직접 손보고 싶으면 ‘자막 파일 열기’로 편집 앱에서 수정하세요." +
                         if (vm.hasNextInQueue) "\n\n‘덮어쓰고 다음’을 누르면 저장 후 폴더의 다음 자막으로 넘어가요." else ""
                 )
             },
@@ -601,12 +596,6 @@ private fun ResultDialog(text: String, onCopied: (String) -> Unit, onClose: () -
             }
         }
     }
-}
-
-private fun suggestName(name: String?): String {
-    val n = name ?: "subtitle.txt"
-    val dot = n.lastIndexOf('.')
-    return if (dot > 0) n.substring(0, dot) + "_clean" + n.substring(dot) else n + "_clean"
 }
 
 @Composable
@@ -1439,7 +1428,7 @@ private fun BackupSection(vm: AppViewModel) {
 
     SettingSwitch(
         "덮어쓰기 전에 원본 백업",
-        "'원본에 덮어쓰기' 직전에, 그 파일이 있는 폴더 안에 '원본 자막' 폴더를 만들고 원본을 한 번만 저장해요(.srt .vtt .lrc .txt 모두 같아요). 같은 이름의 백업이 이미 있으면 다시 저장하지 않아서 처음 원본이 그대로 남아요. 백업을 못 하면 덮어쓰지 않아요. '다른 이름으로 저장'은 원본이 안 바뀌니 백업하지 않아요.",
+        "'원본에 덮어쓰기' 직전에, 그 파일이 있는 폴더 안에 '원본 자막' 폴더를 만들고 원본을 한 번만 저장해요(.srt .vtt .lrc .txt 모두 같아요). 같은 이름의 백업이 이미 있으면 다시 저장하지 않아서 처음 원본이 그대로 남아요. 백업을 못 하면 덮어쓰지 않아요. ‘자막 파일 열기’로 외부 편집 앱에서 고치는 것은 덮어쓰기가 아니라서 이 백업을 하지 않아요.",
         vm.backupOriginal
     ) { vm.updateBackupOriginal(it) }
     if (vm.backupOriginal) {
