@@ -2,9 +2,52 @@
     <!-- 파일은 시스템 파일 선택기(SAF)로 열고 저장한다. 인터넷 권한은 없다(DeepL 은 DeepL 앱을 직접 연다).
          '모든 파일 접근'은 원본 백업(원본 폴더 안에 vtt 폴더 만들기)에만 쓰고, 설정 탭에서 끌 수 있다. -->
     <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
-    <!-- 안드로이드 11+ 에서 DeepL 앱이 설치돼 있는지 보고 열기 위해 필요 -->
+    <!-- 안드로이드 11+ 패키지 가시성: 다른 앱(자막 메모장 등)을 VIEW/EDIT 으로 찾으려면 선언 필요 -->
     <queries>
         <package android:name="com.deepl.mobiletranslator" />
+        <!-- 자막 메모장 (com.ss2ux.notepad) 및 동일 계열 -->
+        <package android:name="com.ss2ux.notepad" />
+        <!-- 텍스트·자막을 여는 편집 앱 일반 -->
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:mimeType="text/*" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.EDIT" />
+            <data android:mimeType="text/*" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:mimeType="*/*" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.EDIT" />
+            <data android:mimeType="*/*" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:mimeType="application/x-subrip" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.EDIT" />
+            <data android:mimeType="application/x-subrip" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:mimeType="text/vtt" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.EDIT" />
+            <data android:mimeType="text/vtt" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:mimeType="application/octet-stream" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.EDIT" />
+            <data android:mimeType="application/octet-stream" />
+        </intent>
     </queries>
 
     <application

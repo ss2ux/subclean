@@ -731,9 +731,12 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
     }
 
     /**
-     * 지금 연 자막을 외부 텍스트 편집기로 연다 (편집 모드).
-     * 시스템 앱 선택 창을 띄워 사용자가 연결 가능한 앱을 고르게 한다.
-     * 쓰기 권한을 함께 넘겨서 읽기 전용이 아니라 저장·수정이 가능하게 한다.
+     * 지금 연 자막을 외부 텍스트 편집기(자막 메모장 등)로 연다.
+     * 시스템 앱 선택 창에서 고른다. 읽기+쓰기 URI 권한을 넘겨 편집·저장이 되게 한다.
+     *
+     * Android 11+ 에서는 다른 앱이 안 보이면 resolveActivity 가 null 이 된다.
+     * → 매니페스트 <queries> 로 VIEW/EDIT 을 열어 두고, 인텐트에 DEFAULT 카테고리를 넣으며,
+     *   검사에 실패해도 선택 창은 띄운다 (시스템이 받을 앱을 다시 고른다).
      */
     fun openSubtitleInEditor() {
         val uri = fileUri
@@ -742,6 +745,7 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
             return
         }
         val name = fileName ?: ""
+        // 메모장·일반 편집기는 text/plain 을 가장 잘 받는다. 확장자별 MIME 도 후보로 쓴다.
         val mime = when (name.substringAfterLast('.', "").lowercase()) {
             "srt" -> "application/x-subrip"
             "vtt" -> "text/vtt"
@@ -750,36 +754,45 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
             else -> "text/plain"
         }
         try {
-            // 편집 모드: 읽기+쓰기 권한을 넘긴다. 일부 앱은 ACTION_EDIT 만, 일부는 VIEW 만 받으므로
-            // EDIT 를 우선으로 초안을 만들고, 받는 앱이 없으면 VIEW(쓰기 권한 포함)로 다시 시도한다.
-            val edit = Intent(Intent.ACTION_EDIT).apply {
-                setDataAndType(uri, mime)
-                addFlags(
-                    Intent.FLAG_GRANT_READ_URI_PERMISSION or
-                        Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
-                        Intent.FLAG_ACTIVITY_NEW_TASK
-                )
+            fun build(action: String, type: String): Intent {
+                return Intent(action).apply {
+                    setDataAndType(uri, type)
+                    addCategory(Intent.CATEGORY_DEFAULT)
+                    addFlags(
+                        Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                            Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
+                            Intent.FLAG_GRANT_PREFIX_URI_PERMISSION or
+                            Intent.FLAG_ACTIVITY_NEW_TASK
+                    )
+                    // 선택 앱에도 URI 권한이 전달되도록 ClipData 에 넣는다
+                    clipData = android.content.ClipData.newUri(app.contentResolver, "subtitle", uri)
+                }
             }
-            val view = Intent(Intent.ACTION_VIEW).apply {
-                setDataAndType(uri, mime)
-                addFlags(
-                    Intent.FLAG_GRANT_READ_URI_PERMISSION or
-                        Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
-                        Intent.FLAG_ACTIVITY_NEW_TASK
-                )
-            }
+            // 받을 앱이 넓어지도록 MIME 후보를 여러 개 준비
+            val mimeCandidates = linkedSetOf(mime, "text/plain", "text/*", "*/*")
             val pm = app.packageManager
-            val canEdit = edit.resolveActivity(pm) != null
-            val base = if (canEdit) edit else view
-            if (base.resolveActivity(pm) == null) {
-                message = "이 파일을 열 수 있는 앱이 없어요"
-                return
+            var base: Intent? = null
+            val extras = ArrayList<Intent>()
+            for (t in mimeCandidates) {
+                for (action in listOf(Intent.ACTION_EDIT, Intent.ACTION_VIEW)) {
+                    val intent = build(action, t)
+                    if (intent.resolveActivity(pm) != null) {
+                        if (base == null) base = intent else extras.add(intent)
+                    }
+                }
+            }
+            // resolve 가 전부 비어도(가시성 제한) text/plain VIEW 로 선택 창을 띄운다
+            if (base == null) {
+                base = build(Intent.ACTION_VIEW, "text/plain")
             }
             val chooser = Intent.createChooser(base, "자막 편집 앱 선택").apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                // 선택지에 VIEW 도 같이 넣고 싶을 때 (EDIT 가 있는 경우)
-                if (canEdit && view.resolveActivity(pm) != null) {
-                    putExtra(Intent.EXTRA_INITIAL_INTENTS, arrayOf(view))
+                addFlags(
+                    Intent.FLAG_ACTIVITY_NEW_TASK or
+                        Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                        Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                )
+                if (extras.isNotEmpty()) {
+                    putExtra(Intent.EXTRA_INITIAL_INTENTS, extras.take(3).toTypedArray())
                 }
             }
             app.startActivity(chooser)
