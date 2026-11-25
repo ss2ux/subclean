@@ -4,6 +4,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -189,6 +190,8 @@ private fun CleanScreen(vm: AppViewModel) {
     if (pullState.isRefreshing) {
         LaunchedEffect(true) { vm.reloadFile { pullState.endRefresh() } }
     }
+    // 외부 편집 앱에서 돌아오면 자막을 1회만 다시 읽는다
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { vm.onCleanScreenResume() }
 
     val doc = vm.doc
     val dec = vm.decoded
@@ -259,9 +262,16 @@ private fun CleanScreen(vm: AppViewModel) {
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     OutlinedButton(
-                        onClick = { vm.openSubtitleInEditor() },
+                        onClick = { vm.openSubtitleInEditor(forcePick = false) },
                         enabled = !vm.busy && vm.fileUri != null,
-                        modifier = Modifier.weight(1f)
+                        modifier = Modifier
+                            .weight(1f)
+                            .pointerInput(Unit) {
+                                // 길게 누르면 기억한 편집 앱을 지우고 다시 고름
+                                detectTapGestures(
+                                    onLongPress = { vm.openSubtitleInEditor(forcePick = true) }
+                                )
+                            }
                     ) { Text("자막 파일 열기") }
                     Button(
                         onClick = { confirmOverwrite = true },

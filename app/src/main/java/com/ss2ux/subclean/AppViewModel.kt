@@ -730,22 +730,44 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
         save(null, overwrite = true, openNextAfter = true)
     }
 
+    /** 외부 편집 앱을 연 뒤, 다음 ON_RESUME 때 자막을 1회만 다시 읽는다 */
+    @Volatile
+    private var reloadOnceOnResume = false
+
+    /**
+     * 화면이 다시 보일 때 호출. 외부 편집에서 돌아오면 파일을 한 번만 새로고침한다.
+     */
+    fun onCleanScreenResume() {
+        if (!reloadOnceOnResume) return
+        reloadOnceOnResume = false
+        if (fileUri == null) return
+        reloadFile()
+    }
+
     /**
      * 지금 연 자막을 외부 텍스트 편집기(자막 메모장 등)로 연다.
-     * 시스템 앱 선택 창에서 고른다. 읽기+쓰기 URI 권한을 넘겨 편집·저장이 되게 한다.
+     * 읽기+쓰기 URI 권한을 넘겨 편집·저장이 되게 한다.
      *
-     * Android 11+ 에서는 다른 앱이 안 보이면 resolveActivity 가 null 이 된다.
-     * → 매니페스트 <queries> 로 VIEW/EDIT 을 열어 두고, 인텐트에 DEFAULT 카테고리를 넣으며,
-     *   검사에 실패해도 선택 창은 띄운다 (시스템이 받을 앱을 다시 고른다).
+     * [forcePick] = false (기본)
+     *  - 예전에 고른 앱(또는 시스템 “항상”)이 있으면 그걸로 바로 연다.
+     *  - 없으면 시스템 선택 창이 뜨고, 거기서 “항상”을 고르면 다음부터 자동이다.
+     *    (Intent.createChooser 를 쓰지 않음 — 쓰면 매번 선택만 뜨고 “항상”이 없음)
+     * [forcePick] = true
+     *  - 저장된 기본 앱을 지우고 다시 고르게 한다 (버튼 길게 누르기).
+     *
+     * 편집 앱을 연 뒤 이 앱으로 돌아오면 [onCleanScreenResume] 에서 자막을 1회 다시 읽는다.
      */
-    fun openSubtitleInEditor() {
+    fun openSubtitleInEditor(forcePick: Boolean = false) {
         val uri = fileUri
         if (uri == null) {
             message = "먼저 자막 파일을 열어 주세요"
             return
         }
+        if (forcePick) {
+            settingsStore.lastEditorPackage = null
+            settingsStore.lastEditorActivity = null
+        }
         val name = fileName ?: ""
-        // 메모장·일반 편집기는 text/plain 을 가장 잘 받는다. 확장자별 MIME 도 후보로 쓴다.
         val mime = when (name.substringAfterLast('.', "").lowercase()) {
             "srt" -> "application/x-subrip"
             "vtt" -> "text/vtt"
@@ -764,41 +786,80 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
                             Intent.FLAG_GRANT_PREFIX_URI_PERMISSION or
                             Intent.FLAG_ACTIVITY_NEW_TASK
                     )
-                    // 선택 앱에도 URI 권한이 전달되도록 ClipData 에 넣는다
                     clipData = android.content.ClipData.newUri(app.contentResolver, "subtitle", uri)
                 }
             }
-            // 받을 앱이 넓어지도록 MIME 후보를 여러 개 준비
-            val mimeCandidates = linkedSetOf(mime, "text/plain", "text/*", "*/*")
             val pm = app.packageManager
-            var base: Intent? = null
-            val extras = ArrayList<Intent>()
+            val mimeCandidates = listOf(mime, "text/plain", "text/*", "*/*")
+            val actions = listOf(Intent.ACTION_EDIT, Intent.ACTION_VIEW)
+
+            // 1) 우리가 기억해 둔 앱이 있으면 그걸로 바로 연다
+            val savedPkg = settingsStore.lastEditorPackage
+            val savedAct = settingsStore.lastEditorActivity
+            if (!forcePick && savedPkg != null) {
+                for (t in mimeCandidates) {
+                    for (action in actions) {
+                        val intent = build(action, t)
+                        if (savedAct != null) {
+                            intent.component = android.content.ComponentName(savedPkg, savedAct)
+                        } else {
+                            intent.`package` = savedPkg
+                        }
+                        if (intent.resolveActivity(pm) != null) {
+                            reloadOnceOnResume = true
+                            app.startActivity(intent)
+                            return
+                        }
+                    }
+                }
+                // 기억한 앱이 지워졌거나 더 이상 못 열면 기억 삭제
+                settingsStore.lastEditorPackage = null
+                settingsStore.lastEditorActivity = null
+            }
+
+            // 2) 시스템이 “항상”으로 지정한 기본 앱이 있으면 그걸 쓰고 기억한다
             for (t in mimeCandidates) {
-                for (action in listOf(Intent.ACTION_EDIT, Intent.ACTION_VIEW)) {
+                for (action in actions) {
                     val intent = build(action, t)
-                    if (intent.resolveActivity(pm) != null) {
-                        if (base == null) base = intent else extras.add(intent)
+                    val defaults = pm.queryIntentActivities(
+                        intent,
+                        android.content.pm.PackageManager.MATCH_DEFAULT_ONLY
+                    )
+                    if (defaults.size == 1) {
+                        val info = defaults[0].activityInfo
+                        settingsStore.lastEditorPackage = info.packageName
+                        settingsStore.lastEditorActivity = info.name
+                        intent.component = android.content.ComponentName(info.packageName, info.name)
+                        reloadOnceOnResume = true
+                        app.startActivity(intent)
+                        return
                     }
                 }
             }
-            // resolve 가 전부 비어도(가시성 제한) text/plain VIEW 로 선택 창을 띄운다
-            if (base == null) {
-                base = build(Intent.ACTION_VIEW, "text/plain")
-            }
-            val chooser = Intent.createChooser(base, "자막 편집 앱 선택").apply {
-                addFlags(
-                    Intent.FLAG_ACTIVITY_NEW_TASK or
-                        Intent.FLAG_GRANT_READ_URI_PERMISSION or
-                        Intent.FLAG_GRANT_WRITE_URI_PERMISSION
-                )
-                if (extras.isNotEmpty()) {
-                    putExtra(Intent.EXTRA_INITIAL_INTENTS, extras.take(3).toTypedArray())
+
+            // 3) 여러 앱이면 createChooser 없이 그냥 연다 → 시스템 창에 “한 번만 / 항상”이 나온다
+            for (t in mimeCandidates) {
+                for (action in actions) {
+                    val intent = build(action, t)
+                    if (intent.resolveActivity(pm) != null) {
+                        reloadOnceOnResume = true
+                        app.startActivity(intent)
+                        return
+                    }
                 }
             }
-            app.startActivity(chooser)
+            message = "이 파일을 열 수 있는 앱이 없어요"
         } catch (e: Exception) {
+            reloadOnceOnResume = false
             message = "파일을 열지 못했어요: ${e.message ?: e}"
         }
+    }
+
+    /** 자막 편집 앱 기본값 지우기 (다음에 다시 선택) */
+    fun clearSubtitleEditorPreference() {
+        settingsStore.lastEditorPackage = null
+        settingsStore.lastEditorActivity = null
+        message = "편집 앱 기본값을 지웠어요. 다음에 다시 고를 수 있어요"
     }
 
     /** overwrite = true 면 열었던 원본 파일에 덮어쓰고, false 면 target 에 새로 저장.

@@ -240,6 +240,22 @@ class SettingsStore(context: Context) {
         get() = p.getString("lastOpenName", null)
         set(v) { p.edit().putString("lastOpenName", v).apply() }
 
+    /** 자막 파일 열기에 쓸 외부 편집 앱 패키지 (없으면 시스템 기본/선택) */
+    var lastEditorPackage: String?
+        get() = p.getString("lastEditorPackage", null)
+        set(v) {
+            if (v == null) p.edit().remove("lastEditorPackage").apply()
+            else p.edit().putString("lastEditorPackage", v).apply()
+        }
+
+    /** 자막 파일 열기에 쓸 외부 편집 앱 액티비티 (패키지와 함께 쓰면 바로 열림) */
+    var lastEditorActivity: String?
+        get() = p.getString("lastEditorActivity", null)
+        set(v) {
+            if (v == null) p.edit().remove("lastEditorActivity").apply()
+            else p.edit().putString("lastEditorActivity", v).apply()
+        }
+
     fun save(o: CleanOptions) {
         p.edit()
             .putInt("threshold", o.threshold)
