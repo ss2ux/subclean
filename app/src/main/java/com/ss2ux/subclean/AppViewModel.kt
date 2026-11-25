@@ -357,7 +357,9 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
 
     /**
      * 폴더(디렉터리)를 열어 자막 파일 목록과 같은 이름 줄기(basename)의 오디오를 짝지운다.
-     * 첫 번째 자막을 바로 연다.
+     * 하위 폴더까지 전부 훑고, 짝은 **같은 폴더 안**에서만 맞춘다.
+     * (예: disc1/dd.mp3 + disc1/dd.vtt 는 짝, 다른 폴더의 dd.txt 는 음원이 없으면 큐에 넣지 않음)
+     * 음원과 짝이 맞는 자막만 큐에 넣고, 첫 번째 자막을 바로 연다.
      */
     fun openFolder(treeUri: Uri) {
         busy = true
@@ -378,13 +380,37 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
                     }
                     return@launch
                 }
-                // 자막: srt/vtt/lrc/txt 모두 큐에 넣고 오디오와 짝짓는다
                 val subExt = setOf("srt", "vtt", "lrc", "txt")
                 val audioExt = setOf("mp3", "m4a", "flac", "wav", "ogg", "aac", "opus")
-                val children = tree.listFiles().filter { it.isFile && it.name != null }
-                val subs = children.filter { it.name!!.substringAfterLast('.', "").lowercase() in subExt }
-                    .sortedBy { it.name!!.lowercase() }
-                val audios = children.filter { it.name!!.substringAfterLast('.', "").lowercase() in audioExt }
+
+                // 하위 폴더까지 파일 수집: (부모 URI 문자열, 표시용 상대경로, DocumentFile)
+                data class Found(
+                    val parentKey: String,
+                    val relativePath: String,
+                    val file: androidx.documentfile.provider.DocumentFile
+                )
+                val found = ArrayList<Found>()
+                fun walk(dir: androidx.documentfile.provider.DocumentFile, prefix: String) {
+                    val parentKey = dir.uri.toString()
+                    val children = try {
+                        dir.listFiles()
+                    } catch (_: Exception) {
+                        return
+                    }
+                    for (f in children) {
+                        val name = f.name ?: continue
+                        if (name.startsWith(".")) continue
+                        if (f.isDirectory) {
+                            val next = if (prefix.isEmpty()) name else "$prefix/$name"
+                            walk(f, next)
+                        } else if (f.isFile) {
+                            val rel = if (prefix.isEmpty()) name else "$prefix/$name"
+                            found.add(Found(parentKey, rel, f))
+                        }
+                    }
+                }
+                walk(tree, "")
+
                 // 짝 예시
                 //   song.vtt / song.txt / song.srt     ↔ song.mp3
                 //   song.mp3.vtt / song.mp3.txt        ↔ song.mp3
@@ -392,16 +418,13 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
                 fun subMatchKeys(name: String): List<String> {
                     val lower = name.lowercase()
                     val keys = linkedSetOf<String>()
-                    // 1) 마지막 확장자만 제거: song.txt → song, song.mp3.txt → song.mp3
                     if ('.' !in lower) return listOf(lower)
                     var cur = lower.substringBeforeLast('.')
                     keys.add(cur)
-                    // 2) 이름 안에 오디오 확장자가 끼어 있으면 벗겨 가며 후보 추가
-                    //    song.mp3.txt → song.mp3(파일명), song(줄기)
                     while ('.' in cur) {
                         val ext = cur.substringAfterLast('.')
                         if (ext in audioExt) {
-                            keys.add(cur) // 정확히 song.mp3 인 오디오
+                            keys.add(cur)
                             cur = cur.substringBeforeLast('.')
                             keys.add(cur)
                         } else {
@@ -410,27 +433,49 @@ class AppViewModel(private val app: Application) : AndroidViewModel(app) {
                     }
                     return keys.toList()
                 }
-                val audioByStem = audios.groupBy { stem(it.name!!) }
-                val audioByFullName = audios.associateBy { it.name!!.lowercase() }
-                val items = subs.map { sub ->
-                    val keys = subMatchKeys(sub.name!!)
-                    val audio = keys.firstNotNullOfOrNull { k ->
-                        audioByStem[k]?.firstOrNull()
-                            ?: audioByFullName[k]
-                            ?: audioExt.firstNotNullOfOrNull { ext -> audioByFullName["$k.$ext"] }
+
+                // 부모 폴더별로 묶어서, 같은 폴더 안에서만 자막↔음원 짝을 맞춘다
+                val byParent = found.groupBy { it.parentKey }
+                val items = ArrayList<QueueItem>()
+                for ((_, files) in byParent) {
+                    val subs = files.filter {
+                        it.file.name!!.substringAfterLast('.', "").lowercase() in subExt
                     }
-                    QueueItem(sub.name!!, sub.uri, audio?.uri, audio?.name)
+                    val audios = files.filter {
+                        it.file.name!!.substringAfterLast('.', "").lowercase() in audioExt
+                    }
+                    if (subs.isEmpty() || audios.isEmpty()) continue
+                    val audioByStem = audios.groupBy { stem(it.file.name!!) }
+                    val audioByFullName = audios.associateBy { it.file.name!!.lowercase() }
+                    for (sub in subs) {
+                        val keys = subMatchKeys(sub.file.name!!)
+                        val audio = keys.firstNotNullOfOrNull { k ->
+                            audioByStem[k]?.firstOrNull()
+                                ?: audioByFullName[k]
+                                ?: audioExt.firstNotNullOfOrNull { ext -> audioByFullName["$k.$ext"] }
+                        } ?: continue // 같은 폴더에 짝 음원이 없으면 큐에 넣지 않음
+                        items.add(
+                            QueueItem(
+                                name = sub.relativePath,
+                                subUri = sub.file.uri,
+                                audioUri = audio.file.uri,
+                                audioName = audio.relativePath
+                            )
+                        )
+                    }
                 }
+                items.sortBy { it.name.lowercase() }
+
                 withContext(Dispatchers.Main) {
                     folderUri = treeUri
                     folderName = tree.name ?: "폴더"
                     queue = items
                     queueIndex = -1
                     if (items.isEmpty()) {
-                        message = "이 폴더에 자막 파일(.srt .vtt .lrc .txt)이 없어요"
+                        message = "짝이 맞는 자막·음원이 없어요 (같은 폴더에 이름 줄기가 같은 파일)"
                         busy = false
                     } else {
-                        message = "자막 ${items.size}개 · 오디오 짝 ${items.count { it.audioUri != null }}개"
+                        message = "자막 ${items.size}개 · 오디오 짝 ${items.size}개 (하위 폴더 포함)"
                         openQueueItem(0)
                     }
                 }
